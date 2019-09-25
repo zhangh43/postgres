@@ -2192,6 +2192,14 @@ expression_tree_walker(Node *node,
 					return true;
 			}
 			break;
+		case T_CustomScan:
+			{
+				CustomScan *cs = (CustomScan *) node;
+				if (expression_tree_walker((Node *)cs->scan.plan.targetlist,
+							walker, context))
+					return true;
+				break;
+			}
 		default:
 			elog(ERROR, "unrecognized node type: %d",
 				 (int) nodeTag(node));

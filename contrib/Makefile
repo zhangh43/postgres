@@ -50,6 +50,7 @@ SUBDIRS = \
 		tsearch2	\
 		unaccent	\
 		vacuumlo
+		vectorize_engine	\
 
 ifeq ($(with_openssl),yes)
 SUBDIRS += sslinfo
