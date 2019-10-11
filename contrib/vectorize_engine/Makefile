@@ -10,6 +10,7 @@ OBJS += vector_engine.o
 OBJS += v_scan.o
 OBJS += vtype.o
 OBJS += vcheck.o
+OBJS += vconvert.o
 
 # print vectorize info when compile
 #PG_CFLAGS = -fopt-info-vec
