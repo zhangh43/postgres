@@ -19,10 +19,13 @@
 #include "vector_engine.h"
 #include "vcheck.h"
 #include "vconvert.h"
+#include "vtype.h"
 
 
 typedef struct VectorConvertState VectorConvertState;
 static Node *CreateVectorConvertState(CustomScan *custom_plan);
+static bool FetchRowFromBatch(TupleTableSlot *vslot, TupleTableSlot *slot);
+static int iter = 0;
 
 static CustomScanMethods	vectorconvert_methods = {
 	"vectorconvert",			/* CustomName */
@@ -56,6 +59,9 @@ struct VectorConvertState
 {
 	CustomScanState	css;
 
+	TupleTableSlot *ps_ResultTupleSlot; /* slot for my result tuples */
+	TupleTableSlot *ps_ResultVTupleSlot; /* slot for my result tuples */
+
 	/* Attributes for vectorization */
 };
 
@@ -66,8 +72,57 @@ BeginVectorConvert(CustomScanState *node, EState *estate, int eflags)
 	CustomScan     *cscan = (CustomScan *) node->ss.ps.plan;
 
 	outerPlanState(vcs) = ExecInitNode(outerPlan(cscan), estate, eflags);
-	((PlanState*)vcs)->ps_ResultTupleSlot = outerPlanState(vcs)->ps_ResultTupleSlot;
+	
+	((PlanState*)vcs)->ps_ResultTupleSlot->tts_tupleDescriptor = CreateTupleDescCopy(outerPlanState(vcs)->ps_ResultTupleSlot->tts_tupleDescriptor);
 
+	/* Convert Vtype in tupdesc to Ntype in Convert Node */
+    {
+        TupleDesc   tupdesc = node->ss.ps.ps_ResultTupleSlot->tts_tupleDescriptor;
+
+        for (int i = 0; i < tupdesc->natts; i++)
+        {
+            Form_pg_attribute attr = tupdesc->attrs[i];
+            Oid         typid = GetNtype(attr->atttypid);
+            if (typid != InvalidOid)
+                attr->atttypid = typid;
+        }
+    }
+
+	vcs->ps_ResultVTupleSlot = ExecInitExtraTupleSlot(estate);
+	vcs->ps_ResultVTupleSlot->tts_tupleDescriptor = CreateTupleDescCopy(outerPlanState(vcs)->ps_ResultTupleSlot->tts_tupleDescriptor);
+
+
+}
+
+static bool
+FetchRowFromBatch(TupleTableSlot *vslot, TupleTableSlot *slot){
+	int		natts;
+	
+	natts = vslot->tts_tupleDescriptor->natts;
+
+	if (natts <= 0)
+		return false;
+
+	ExecStoreVirtualTuple(slot);
+	
+	/* we have checked that natts is greater than zero */
+	if( iter >= ((vtype*)vslot->tts_values[0])->dim )
+	{
+		iter = 0;
+		return false;
+	}
+
+	for(int i = 0;i < natts;i ++)
+	{
+		slot->tts_values[i] = ((vtype*)vslot->tts_values[i])->values[iter];
+		slot->tts_isnull[i] = false;
+	}
+
+	if(++iter == BATCHSIZE)
+	{
+		iter = 0;
+	}
+	return true;
 }
 
 /*
@@ -76,8 +131,27 @@ BeginVectorConvert(CustomScanState *node, EState *estate, int eflags)
 static TupleTableSlot *
 ExecVectorConvert(CustomScanState *node)
 {
-	TupleTableSlot	   *slot;
-	slot = ExecProcNode(node->ss.ps.lefttree);
+	VectorConvertState *vcs = (VectorConvertState*) node;
+	TupleTableSlot	   *slot =  ((PlanState*)vcs)->ps_ResultTupleSlot;
+	TupleTableSlot	   *vslot = vcs->ps_ResultVTupleSlot;
+
+	while(true)
+	{
+		if(iter == 0)
+		{
+			vslot = ExecProcNode(node->ss.ps.lefttree);
+			vcs->ps_ResultVTupleSlot = vslot;
+			if(TupIsNull(vslot))
+			{
+				slot = vslot;
+				break;
+			}
+			/* Make sure the tuple is fully deconstructed */
+			slot_getallattrs(vslot);
+		}
+		if(FetchRowFromBatch(vslot, slot))
+			break;
+	}
 	return slot;
 }
 
