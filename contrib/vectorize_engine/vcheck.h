@@ -8,5 +8,6 @@
 extern void CheckAndReplacePlanVectorized(PlannedStmt *stmt);
 extern Oid GetVtype(Oid ntype);
 extern Oid GetNtype(Oid vtype);
+extern bool hasVectorizedFunc(Oid func);
 
 #endif /* INCLUDE_UTILS_VCHECK_H_ */

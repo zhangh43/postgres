@@ -126,15 +126,48 @@ SetVectorScanPath(PlannerInfo *root, RelOptInfo *baserel,
 
 	/* only plain relations are supported */
 	if (rte->rtekind != RTE_RELATION)
+	{
+		/* calls secondary module if exists */
+		if (set_rel_pathlist_next)
+			set_rel_pathlist_next(root, baserel, rtindex, rte);
 		return;
+	}
 	relkind = get_rel_relkind(rte->relid);
 	if (relkind != RELKIND_RELATION &&
 		relkind != RELKIND_MATVIEW &&
 		relkind != RELKIND_TOASTVALUE)
+	{
+		/* calls secondary module if exists */
+		if (set_rel_pathlist_next)
+			set_rel_pathlist_next(root, baserel, rtindex, rte);
 		return;
+	}
 
 	if (!enable_vectorscan)
+	{
+		/* calls secondary module if exists */
+		if (set_rel_pathlist_next)
+			set_rel_pathlist_next(root, baserel, rtindex, rte);
 		return;
+	}
+
+	/* check whether targetlist and qual support vectorization */
+	ListCell		*cell;
+	foreach(cell, root->processed_tlist)
+	{
+		TargetEntry		*te = lfirst(cell);
+		Expr *expr = te->expr;
+		if (expr && IsA(expr, OpExpr))
+		{
+			if(!hasVectorizedFunc(((OpExpr *) expr)->opfuncid))
+			{
+				/* calls secondary module if exists */
+				if (set_rel_pathlist_next)
+					set_rel_pathlist_next(root, baserel, rtindex, rte);
+				return;
+			}
+		}
+	}
 
 	/* FIXME: do not add vectorscan blindly */
 	{

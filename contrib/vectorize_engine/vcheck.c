@@ -344,3 +344,17 @@ Oid GetNtype(Oid vtype)
 	return InvalidOid;
 }
 
+bool hasVectorizedFunc(Oid funcOid)
+{
+	bool		couldVectorized;
+	couldVectorized = false;
+	int whitelist[4]={141,154,177,181};
+	for(int i=0;i<4;i++)
+	{
+		if(funcOid == whitelist[i])
+			couldVectorized = true;
+	}
+	return couldVectorized;
+
+}
+
