@@ -14,6 +14,7 @@
 #include "utils/lsyscache.h"
 #include "utils/syscache.h"
 #include "vcheck.h"
+#include "vwalker.h"
 
 
 typedef struct VecTypeHashEntry
@@ -224,7 +225,7 @@ ReplacePlanNodeWalker(PlannedStmt *stmt, Node *node)
 	ctx.replace = true;
 	ctx.retType = InvalidOid;
 
-	expression_tree_walker(node, CheckVectorizedExpression, &ctx);
+	plan_tree_walker(node, CheckVectorizedExpression, &ctx);
 
 	return true;
 }
