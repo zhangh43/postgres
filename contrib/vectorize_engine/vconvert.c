@@ -86,7 +86,9 @@ BeginVectorConvert(CustomScanState *node, EState *estate, int eflags)
             if (typid != InvalidOid)
                 attr->atttypid = typid;
         }
+		ExecSetSlotDescriptor(((PlanState*)vcs)->ps_ResultTupleSlot, tupdesc);
     }
+
 
 	vcs->ps_ResultVTupleSlot = ExecInitExtraTupleSlot(estate);
 	vcs->ps_ResultVTupleSlot->tts_tupleDescriptor = CreateTupleDescCopy(outerPlanState(vcs)->ps_ResultTupleSlot->tts_tupleDescriptor);
@@ -161,6 +163,9 @@ ExecVectorConvert(CustomScanState *node)
 static void
 EndVectorConvert(CustomScanState *node)
 {
+	PlanState  *outerPlan;
+	outerPlan = outerPlanState(node);
+	ExecEndNode(outerPlan);
 }
 
 
