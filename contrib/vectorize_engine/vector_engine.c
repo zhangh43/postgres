@@ -46,7 +46,7 @@ vector_post_planner(Query *parse,
 void
 _PG_init(void)
 {
-	init_vectorscan();
+	InitVectorScan();
 	init_vector_convert();
 
     /* planner hook registration */

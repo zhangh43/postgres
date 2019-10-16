@@ -46,9 +46,10 @@ typedef struct VectorizedContext
  * all the expressions in the Plan node, if we return true, then the walker will be
  * over...
  */
-static bool
-CheckVectorizedExpression(Node *node, VectorizedContext *ctx)
+static Node*
+VectorizeMutator(Node *node, VectorizedContext *ctx)
 {
+	Node		   *newnode;
 	if(NULL == node)
 		return false;
 
@@ -56,6 +57,8 @@ CheckVectorizedExpression(Node *node, VectorizedContext *ctx)
 	if(is_plan_node(node))
 		return false;
 #endif
+
+	newnode = plan_tree_mutator(node, VectorizeMutator, ctx);
 
 	//check the type of Var if it can be vectorized
 	if(IsA(node, Var))
@@ -221,27 +224,16 @@ static bool
 ReplacePlanNodeWalker(PlannedStmt *stmt, Node *node)
 {
 	VectorizedContext ctx;
+	Node				 *newnode;
 
 	ctx.replace = true;
 	ctx.retType = InvalidOid;
 
-	plan_tree_walker(node, CheckVectorizedExpression, &ctx);
+	newnode = plan_tree_mutator(node, VectorizeMutator, &ctx);
+	stmt->planTree = newnode;
+	//plan_tree_walker(node, CheckVectorizedExpression, &ctx);
 
 	return true;
-}
-
-/*
- * check the plan tree
- */
-static void
-ReplacePlanVectorzied(PlannedStmt *stmt, Node *node)
-{
-	if(NULL == node)
-		return;
-
-	//ReplacePlanVectorzied(stmt, plan->lefttree);
-	//ReplacePlanVectorzied(stmt, plan->righttree);
-	ReplacePlanNodeWalker(stmt, node);
 }
 
 void
@@ -249,13 +241,13 @@ CheckAndReplacePlanVectorized(PlannedStmt *stmt)
 {
 	ListCell   *cell;
 
-	ReplacePlanVectorzied(stmt, (Node *) stmt->planTree);
+	ReplacePlanNodeWalker(stmt, (Node *) stmt->planTree);
 
 	foreach(cell, stmt->subplans)
 	{
 		Plan	   *subplan = lfirst(cell);
 
-		ReplacePlanVectorzied(stmt, (Node *) subplan);
+		ReplacePlanNodeWalker(stmt, (Node *) subplan);
 	}
 }
 

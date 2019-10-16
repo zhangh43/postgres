@@ -10,7 +10,8 @@
 
 static bool walk_scan_node_fields(Scan *scan, bool (*walker) (), void *context);
 static bool walk_join_node_fields(Join *join, bool (*walker) (), void *context);
-
+static void mutate_plan_fields(Plan *newplan, Plan *oldplan, Node *(*mutator) (), void *context);
+static void mutate_join_fields(Join *newjoin, Join *oldjoin, Node *(*mutator) (), void *context);
 
 /* ----------------------------------------------------------------------- *
  * Plan Tree Walker Framework
@@ -477,4 +478,202 @@ plan_tree_walker(Node *node,
 			return expression_tree_walker(node, walker, context);
 	}
 	return false;
+}
+
+
+
+
+
+
+Node *
+plan_tree_mutator(Node *node,
+				  Node *(*mutator) (),
+				  void *context)
+{
+	/*
+	 * The mutator has already decided not to modify the current node, but we
+	 * must call the mutator for any sub-nodes.
+	 */
+
+#define FLATCOPY(newnode, node, nodetype)  \
+	( (newnode) = makeNode(nodetype), \
+	  memcpy((newnode), (node), sizeof(nodetype)) )
+
+#define CHECKFLATCOPY(newnode, node, nodetype)	\
+	( AssertMacro(IsA((node), nodetype)), \
+	  (newnode) = makeNode(nodetype), \
+	  memcpy((newnode), (node), sizeof(nodetype)) )
+
+#define MUTATE(newfield, oldfield, fieldtype)  \
+		( (newfield) = (fieldtype) mutator((Node *) (oldfield), context) )
+
+#define PLANMUTATE(newplan, oldplan) \
+		mutate_plan_fields((Plan*)(newplan), (Plan*)(oldplan), mutator, context)
+
+/* This is just like  PLANMUTATE because Scan adds only scalar fields. */
+#define SCANMUTATE(newplan, oldplan) \
+		mutate_plan_fields((Plan*)(newplan), (Plan*)(oldplan), mutator, context)
+
+#define JOINMUTATE(newplan, oldplan) \
+		mutate_join_fields((Join*)(newplan), (Join*)(oldplan), mutator, context)
+
+#define COPYARRAY(dest,src,lenfld,datfld) \
+	do { \
+		(dest)->lenfld = (src)->lenfld; \
+		if ( (src)->lenfld > 0  && \
+             (src)->datfld != NULL) \
+		{ \
+			Size _size = ((src)->lenfld*sizeof(*((src)->datfld))); \
+			(dest)->datfld = palloc(_size); \
+			memcpy((dest)->datfld, (src)->datfld, _size); \
+		} \
+		else \
+		{ \
+			(dest)->datfld = NULL; \
+		} \
+	} while (0)
+
+
+
+	if (node == NULL)
+		return NULL;
+
+	/* Guard against stack overflow due to overly complex expressions */
+	check_stack_depth();
+
+	switch (nodeTag(node))
+	{
+			/*
+			 * Plan nodes aren't handled by expression_tree_walker, so we need
+			 * to do them here.
+			 */
+		case T_Plan:
+			/* Abstract: Should see only subclasses. */
+			elog(ERROR, "abstract node type not allowed: T_Plan");
+			break;
+		case T_SeqScan:
+			{
+				CustomScan	   *cscan;
+
+				cscan = MakeVScanNode(node);
+				VSeqScan *vscan = linitial(cscan->custom_plans);
+				FLATCOPY(vscan, node, SeqScan);
+
+				SCANMUTATE(vscan, node);
+				/* A SeqScan is really just a Scan, so we're done. */
+				return (Node *) cscan;
+			}
+			break;
+		case T_Const:
+			{
+				Const	   *oldnode = (Const *) node;
+				Const	   *newnode;
+
+				FLATCOPY(newnode, oldnode, Const);
+				/* XXX we don't bother with datumCopy; should we? */
+				return (Node *) newnode;
+			}
+			break;
+		case T_Var:
+		{
+			Var		   *var = (Var *) node;
+			Var		   *newnode;
+
+			FLATCOPY(newnode, var, Var);
+			MUTATE(newnode, var, Var *);
+			return (Node *) newnode;
+		}
+		case T_OpExpr:
+			{
+				OpExpr	   *expr = (OpExpr *) node;
+				OpExpr	   *newnode;
+
+				FLATCOPY(newnode, expr, OpExpr);
+				MUTATE(newnode->args, expr->args, List *);
+				return (Node *) newnode;
+			}
+			break;
+		case T_List:
+			{
+				/*
+				 * We assume the mutator isn't interested in the list nodes
+				 * per se, so just invoke it on each list element. NOTE: this
+				 * would fail badly on a list with integer elements!
+				 */
+				List	   *resultlist;
+				ListCell   *temp;
+
+				resultlist = NIL;
+				foreach(temp, (List *) node)
+				{
+					resultlist = lappend(resultlist,
+										 mutator((Node *) lfirst(temp),
+												 context));
+				}
+				return (Node *) resultlist;
+			}
+			break;
+		case T_TargetEntry:
+			{
+				TargetEntry *targetentry = (TargetEntry *) node;
+				TargetEntry *newnode;
+
+				FLATCOPY(newnode, targetentry, TargetEntry);
+				MUTATE(newnode->expr, targetentry->expr, Expr *);
+				return (Node *) newnode;
+			}
+			break;
+
+		default:
+			elog(ERROR, "abstract node type not allowed: T_Plan");
+			break;
+
+	}
+}
+
+
+
+/* Function mutate_plan_fields() is a subroutine for plan_tree_mutator().
+ * It "hijacks" the macro MUTATE defined for use in that function, so don't
+ * change the argument names "mutator" and "context" use in the macro
+ * definition.
+ *
+ */
+static void
+mutate_plan_fields(Plan *newplan, Plan *oldplan, Node *(*mutator) (), void *context)
+{
+	/*
+	 * Scalar fields startup_cost total_cost plan_rows plan_width nParamExec
+	 * need no mutation.
+	 */
+
+	/* Node fields need mutation. */
+	MUTATE(newplan->targetlist, oldplan->targetlist, List *);
+	MUTATE(newplan->qual, oldplan->qual, List *);
+	MUTATE(newplan->lefttree, oldplan->lefttree, Plan *);
+	MUTATE(newplan->righttree, oldplan->righttree, Plan *);
+	MUTATE(newplan->initPlan, oldplan->initPlan, List *);
+
+	/* Bitmapsets aren't nodes but need to be copied to palloc'd space. */
+	newplan->extParam = bms_copy(oldplan->extParam);
+	newplan->allParam = bms_copy(oldplan->allParam);
+}
+
+
+/* Function mutate_plan_fields() is a subroutine for plan_tree_mutator().
+ * It "hijacks" the macro MUTATE defined for use in that function, so don't
+ * change the argument names "mutator" and "context" use in the macro
+ * definition.
+ *
+ */
+static void
+mutate_join_fields(Join *newjoin, Join *oldjoin, Node *(*mutator) (), void *context)
+{
+	/* A Join node is a Plan node. */
+	mutate_plan_fields((Plan *) newjoin, (Plan *) oldjoin, mutator, context);
+
+	/* Scalar field jointype needs no mutation. */
+
+	/* Node fields need mutation. */
+	MUTATE(newjoin->joinqual, oldjoin->joinqual, List *);
 }

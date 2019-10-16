@@ -16,4 +16,9 @@ extern bool plan_tree_walker(Node *node, bool (*walker) (), void *context);
 
 
 
+extern Node *
+plan_tree_mutator(Node *node,
+				  Node *(*mutator) (),
+				  void *context);
+
 #endif /* VWALKERS_H_ */

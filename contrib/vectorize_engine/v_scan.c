@@ -34,6 +34,7 @@
 #include "vector_engine.h"
 
 #include "vcheck.h"
+#include "v_scan.h"
 
 typedef struct VectorScanState VectorScanState;
 
@@ -87,12 +88,6 @@ ExecVScan(ScanState *node,
 		 ExecScanAccessMtd accessMtd,	/* function returning a tuple */
 		 ExecScanRecheckMtd recheckMtd);
 
-/* static table of custom-scan callbacks */
-static CustomPathMethods	vectorscan_path_methods = {
-	"vectorscan",			/* CustomName */
-	PlanVectorScanPath,		/* PlanCustomPath */
-};
-
 static CustomScanMethods	vectorscan_scan_methods = {
 	"vectorscan",			/* CustomName */
 	CreateVectorScanState,	/* CreateCustomScanState */
@@ -112,100 +107,26 @@ static CustomExecMethods	vectorscan_exec_methods = {
 	NULL,					/* ExplainCustomScan */
 };
 
-/*
- * SetVectorScanPath - entrypoint of the series of custom-scan execution.
- *
- * Derived from create_seqscan_path().
- */
-static void
-SetVectorScanPath(PlannerInfo *root, RelOptInfo *baserel,
-				  Index rtindex, RangeTblEntry *rte)
-{
-	char		relkind;
-	int			parallel_workers = 0;
 
-	/* only plain relations are supported */
-	if (rte->rtekind != RTE_RELATION)
-		return;
-	relkind = get_rel_relkind(rte->relid);
-	if (relkind != RELKIND_RELATION &&
-		relkind != RELKIND_MATVIEW &&
-		relkind != RELKIND_TOASTVALUE)
-		return;
 
-	if (!enable_vectorscan)
-		return;
 
-	/* FIXME: do not add vectorscan blindly */
-	{
-		CustomPath *cpath;
-		Relids		required_outer;
 
-		/*
-		 * We don't support pushing join clauses into the quals of a vectorscan,
-		 * but it could still have required parameterization due to LATERAL
-		 * refs in its tlist.
-		 */
-		required_outer = baserel->lateral_relids;
 
-		cpath = palloc0(sizeof(CustomPath));
-
-		cpath->methods = &vectorscan_path_methods;
-
-		cpath->path.type = T_CustomPath;
-		cpath->path.pathtype = T_CustomScan;
-		cpath->path.pathtarget = baserel->reltarget;
-		cpath->path.parent = baserel;
-		cpath->path.param_info = get_baserel_parampathinfo(root, baserel,
-														   required_outer);
-		cpath->path.parallel_aware = parallel_workers > 0 ? true : false;
-		cpath->path.parallel_safe = baserel->consider_parallel;
-		cpath->path.parallel_workers = parallel_workers;
-		cpath->path.pathkeys = NIL;		/* always unordered */
-
-		/* FIXME: real estimation */
-		cost_seqscan(&cpath->path, root, baserel, cpath->path.param_info);
-
-		/* HACK: force a lower cost */
-		cpath->path.startup_cost = 0;
-		cpath->path.total_cost = 0;
-
-		add_path(baserel, &cpath->path);
-	}
-
-	/* calls secondary module if exists */
-	if (set_rel_pathlist_next)
-		set_rel_pathlist_next(root, baserel, rtindex, rte);
-}
 
 /*
  * PlanVectorScanPlan - A method of CustomPath; that populate a custom
  * object being delivered from CustomScan type, according to the supplied
  * CustomPath object.
  */
-static Plan *
-PlanVectorScanPath(PlannerInfo *root,
-				   RelOptInfo *rel,
-				   CustomPath *best_path,
-				   List *tlist,
-				   List *clauses,
-				   List *custom_plans)
+Plan *
+MakeVScanNode(SeqScan *oldnode)
 {
 	CustomScan *cscan = makeNode(CustomScan);
 
-	cscan->flags = best_path->flags;
+	cscan->custom_plans = lappend(cscan->custom_plans, makeVectorNode(VSeqScan));
 	cscan->methods = &vectorscan_scan_methods;
 
-	/* set scanrelid */
-	cscan->scan.scanrelid = rel->relid;
-	/* set targetlist as is  */
-	cscan->scan.plan.targetlist = tlist;
-	/* reduce RestrictInfo list to bare expressions */
-	cscan->scan.plan.qual = extract_actual_clauses(clauses, false);
-	cscan->scan.plan.lefttree = NULL;
-	cscan->scan.plan.righttree = NULL;
-
-	return &cscan->scan.plan;
+	return cscan;
 }
 
 /*
@@ -703,12 +624,11 @@ EndVectorScan(CustomScanState *node)
 	if (scanDesc != NULL)
 		heap_endscan(scanDesc);
 }
-
 /*
  * Initialize vectorscan CustomScan node.
  */
 void
-init_vectorscan(void)
+InitVectorScan(void)
 {
 
 	DefineCustomBoolVariable("enable_vectorscan",
@@ -722,9 +642,5 @@ init_vectorscan(void)
 
 	/* Register a vscan type of custom scan node */
 	RegisterCustomScanMethods(&vectorscan_scan_methods);
-	
-	/* registration of the hook to add alternative path */
-	set_rel_pathlist_next = set_rel_pathlist_hook;
-	set_rel_pathlist_hook = SetVectorScanPath;
 }
 

@@ -13,7 +13,12 @@
 #ifndef VSCAN_H
 #define VSCAN_H
 
+#include "nodes/plannodes.h"
 
-void init_vectorscan(void);
+typedef Scan VSeqScan;
+
+extern Plan *MakeVScanNode(SeqScan *oldnode);
+
+extern void InitVectorScan(void);
 
 #endif   /* GPVECTOR_H */
