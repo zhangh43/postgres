@@ -1,6 +1,6 @@
 /*-------------------------------------------------------------------------
  *
- * vconvert.h
+ * vscan.h
  *	  TODO file description
  *
  *
@@ -10,10 +10,13 @@
  *-------------------------------------------------------------------------
  */
 
-#ifndef VCONVERT_H
-#define VCONVERT_H
+#ifndef VECTOR_ENGINE_SCAN_H
+#define VECTOR_ENGINE_SCAN_H
 
-void AddConvertNodeAtTop(PlannedStmt *stmt);
-void init_vector_convert(void);
+#include "nodes/plannodes.h"
 
-#endif   /* GPVECTOR_H */
+typedef Scan VSeqScan;
+extern CustomScan *MakeCustomScanForSeqScan(void);
+extern void InitVectorScan(void);
+
+#endif   /* VECTOR_ENGINE_SCAN_H */

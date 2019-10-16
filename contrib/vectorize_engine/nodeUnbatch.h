@@ -1,6 +1,6 @@
 /*-------------------------------------------------------------------------
  *
- * vscan.h
+ * vconvert.h
  *	  TODO file description
  *
  *
@@ -10,10 +10,10 @@
  *-------------------------------------------------------------------------
  */
 
-#ifndef VSCAN_H
-#define VSCAN_H
+#ifndef VCONVERT_H
+#define VCONVERT_H
 
-
-void init_vectorscan(void);
+extern Plan *AddUnbatchNodeAtTop(Plan *node);
+extern void InitUnbatch(void);
 
 #endif   /* GPVECTOR_H */

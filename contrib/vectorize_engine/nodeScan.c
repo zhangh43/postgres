@@ -1,6 +1,6 @@
 /*-------------------------------------------------------------------------
  *
- * v_scan.c
+ * scan.c
  *	  TODO file description
  *
  *
@@ -27,51 +27,40 @@
 #include "optimizer/restrictinfo.h"
 #include "utils/guc.h"
 #include "utils/lsyscache.h"
+#include "utils/rel.h"
 #include "utils/snapmgr.h"
 #include "utils/tqual.h"
 #include "utils/memutils.h"
+#include "nodes/pg_list.h"
+#include "vectorEngine.h"
 
-#include "vector_engine.h"
+#include "nodeScan.h"
+#include "utils.h"
+#include "vtype.h"
 
-#include "vcheck.h"
-
-typedef struct VectorScanState VectorScanState;
+#define slot_get_values(slot)	((slot)->tts_values)
+#define slot_get_isnull(slot)	((slot)->tts_isnull)
 
 /*
  * VectorScanState - state object of vectorscan on executor.
  */
-struct VectorScanState
+typedef struct VectorScanState
 {
 	CustomScanState	css;
 
 	/* Attributes for vectorization */
 	bool		scanFinish;
-};
+} VectorScanState;
 
-struct VectorScanTupleTableSlot
-{
-	TupleTableSlot slot;
-};
+/*
+ * prototypes from functions in execScan.c
+ */
+typedef TupleTableSlot *(*ExecVScanAccessMtd) (CustomScanState *node);
+typedef bool (*ExecVScanRecheckMtd) (CustomScanState *node, TupleTableSlot *slot);
 
-#define slot_get_values(slot)	((slot)->tts_values)
-#define slot_get_isnull(slot)	((slot)->tts_isnull)
 
 /* static variables */
 static bool			enable_vectorscan;
-static set_rel_pathlist_hook_type set_rel_pathlist_next = NULL;
-
-/* function declarations */
-static void SetVectorScanPath(PlannerInfo *root,
-							  RelOptInfo *rel,
-							  Index rti,
-							  RangeTblEntry *rte);
-/* CustomPathMethods */
-static Plan *PlanVectorScanPath(PlannerInfo *root,
-								RelOptInfo *rel,
-								CustomPath *best_path,
-								List *tlist,
-								List *clauses,
-								List *custom_plans);
 
 /* CustomScanMethods */
 static Node *CreateVectorScanState(CustomScan *custom_plan);
@@ -82,16 +71,9 @@ static void ReScanVectorScan(CustomScanState *node);
 static TupleTableSlot *ExecVectorScan(CustomScanState *node);
 static void EndVectorScan(CustomScanState *node);
 
-extern TupleTableSlot *
-ExecVScan(ScanState *node,
-		 ExecScanAccessMtd accessMtd,	/* function returning a tuple */
-		 ExecScanRecheckMtd recheckMtd);
-
-/* static table of custom-scan callbacks */
-static CustomPathMethods	vectorscan_path_methods = {
-	"vectorscan",			/* CustomName */
-	PlanVectorScanPath,		/* PlanCustomPath */
-};
+static TupleTableSlot *ExecVScan(CustomScanState *node,
+									ExecVScanAccessMtd accessMtd,
+									ExecVScanRecheckMtd recheckMtd);
 
 static CustomScanMethods	vectorscan_scan_methods = {
 	"vectorscan",			/* CustomName */
@@ -113,99 +95,15 @@ static CustomExecMethods	vectorscan_exec_methods = {
 };
 
 /*
- * SetVectorScanPath - entrypoint of the series of custom-scan execution.
- *
- * Derived from create_seqscan_path().
+ * Interface to get the custom scan plan for vector scan
  */
-static void
-SetVectorScanPath(PlannerInfo *root, RelOptInfo *baserel,
-				  Index rtindex, RangeTblEntry *rte)
+CustomScan *
+MakeCustomScanForSeqScan(void)
 {
-	char		relkind;
-	int			parallel_workers = 0;
-
-	/* only plain relations are supported */
-	if (rte->rtekind != RTE_RELATION)
-		return;
-	relkind = get_rel_relkind(rte->relid);
-	if (relkind != RELKIND_RELATION &&
-		relkind != RELKIND_MATVIEW &&
-		relkind != RELKIND_TOASTVALUE)
-		return;
-
-	if (!enable_vectorscan)
-		return;
-
-	/* FIXME: do not add vectorscan blindly */
-	{
-		CustomPath *cpath;
-		Relids		required_outer;
-
-		/*
-		 * We don't support pushing join clauses into the quals of a vectorscan,
-		 * but it could still have required parameterization due to LATERAL
-		 * refs in its tlist.
-		 */
-		required_outer = baserel->lateral_relids;
-
-		cpath = palloc0(sizeof(CustomPath));
-
-		cpath->methods = &vectorscan_path_methods;
-
-		cpath->path.type = T_CustomPath;
-		cpath->path.pathtype = T_CustomScan;
-		cpath->path.pathtarget = baserel->reltarget;
-		cpath->path.parent = baserel;
-		cpath->path.param_info = get_baserel_parampathinfo(root, baserel,
-														   required_outer);
-		cpath->path.parallel_aware = parallel_workers > 0 ? true : false;
-		cpath->path.parallel_safe = baserel->consider_parallel;
-		cpath->path.parallel_workers = parallel_workers;
-		cpath->path.pathkeys = NIL;		/* always unordered */
-
-		/* FIXME: real estimation */
-		cost_seqscan(&cpath->path, root, baserel, cpath->path.param_info);
-
-		/* HACK: force a lower cost */
-		cpath->path.startup_cost = 0;
-		cpath->path.total_cost = 0;
-
-		add_path(baserel, &cpath->path);
-	}
-
-	/* calls secondary module if exists */
-	if (set_rel_pathlist_next)
-		set_rel_pathlist_next(root, baserel, rtindex, rte);
-}
-
-/*
- * PlanVectorScanPlan - A method of CustomPath; that populate a custom
- * object being delivered from CustomScan type, according to the supplied
- * CustomPath object.
- */
-static Plan *
-PlanVectorScanPath(PlannerInfo *root,
-				   RelOptInfo *rel,
-				   CustomPath *best_path,
-				   List *tlist,
-				   List *clauses,
-				   List *custom_plans)
-{
-	CustomScan *cscan = makeNode(CustomScan);
-
-	cscan->flags = best_path->flags;
+	CustomScan *cscan = (CustomScan *)makeNode(CustomScan);
 	cscan->methods = &vectorscan_scan_methods;
 
-	/* set scanrelid */
-	cscan->scan.scanrelid = rel->relid;
-	/* set targetlist as is  */
-	cscan->scan.plan.targetlist = tlist;
-	/* reduce RestrictInfo list to bare expressions */
-	cscan->scan.plan.qual = extract_actual_clauses(clauses, false);
-	cscan->scan.plan.lefttree = NULL;
-	cscan->scan.plan.righttree = NULL;
-
-	return &cscan->scan.plan;
+	return cscan;
 }
 
 /*
@@ -213,17 +111,18 @@ PlanVectorScanPath(PlannerInfo *root,
  * object being delivered from CustomScanState type, according to the
  * supplied CustomPath object.
  *
- * Derived from ExecInitSeqScanForPartition().
  */
 static Node *
 CreateVectorScanState(CustomScan *custom_plan)
 {
-	VectorScanState *vss = palloc0(sizeof(VectorScanState));
+	VectorScanState   *css = MemoryContextAllocZero(CurTransactionContext,
+				                                                 sizeof(VectorScanState));
+	/* Set tag and executor callbacks */
+	NodeSetTag(css, T_CustomScanState);
 
-	NodeSetTag(vss, T_CustomScanState);
-	vss->css.methods = &vectorscan_exec_methods;
+	css->css.methods = &vectorscan_exec_methods;
 
-	return (Node *) &vss->css;
+	return (Node *) css;
 }
 
 /*
@@ -236,11 +135,13 @@ CreateVectorScanState(CustomScan *custom_plan)
  * the access method's next-tuple routine.
  */
 static inline TupleTableSlot *
-ExecScanFetch(ScanState *node,
-			  ExecScanAccessMtd accessMtd,
-			  ExecScanRecheckMtd recheckMtd)
+ExecScanFetch(CustomScanState *node,
+			  ExecVScanAccessMtd accessMtd,
+			  ExecVScanRecheckMtd recheckMtd)
 {
-	EState	   *estate = node->ps.state;
+	EState			*estate;
+	
+	estate = node->ss.ps.state;
 
 	if (estate->es_epqTuple != NULL)
 	{
@@ -249,11 +150,11 @@ ExecScanFetch(ScanState *node,
 		 * one is available, after rechecking any access-method-specific
 		 * conditions.
 		 */
-		Index		scanrelid = ((Scan *) node->ps.plan)->scanrelid;
+		Index		scanrelid = ((Scan *) node->ss.ps.plan)->scanrelid;
 
 		if (scanrelid == 0)
 		{
-			TupleTableSlot *slot = node->ss_ScanTupleSlot;
+			TupleTableSlot *slot = node->ss.ss_ScanTupleSlot;
 
 			/*
 			 * This is a ForeignScan or CustomScan which has pushed down a
@@ -267,7 +168,7 @@ ExecScanFetch(ScanState *node,
 		}
 		else if (estate->es_epqTupleSet[scanrelid - 1])
 		{
-			TupleTableSlot *slot = node->ss_ScanTupleSlot;
+			TupleTableSlot *slot = node->ss.ss_ScanTupleSlot;
 
 			/* Return empty slot if we already returned a tuple */
 			if (estate->es_epqScanDone[scanrelid - 1])
@@ -322,16 +223,19 @@ ExecScanFetch(ScanState *node,
  *			 "cursor" is positioned before the first qualifying tuple.
  * ----------------------------------------------------------------
  */
-TupleTableSlot *
-ExecVScan(ScanState *node,
-		 ExecScanAccessMtd accessMtd,	/* function returning a tuple */
-		 ExecScanRecheckMtd recheckMtd)
+static TupleTableSlot *
+ExecVScan(CustomScanState *css,
+		 ExecVScanAccessMtd accessMtd,	/* function returning a tuple */
+		 ExecVScanRecheckMtd recheckMtd)
 {
-	ExprContext *econtext;
-	List	   *qual;
-	ProjectionInfo *projInfo;
-	ExprDoneCond isDone;
-	TupleTableSlot *resultSlot;
+	ExprContext		*econtext;
+	List			*qual;
+	ProjectionInfo	*projInfo;
+	ExprDoneCond	isDone;
+	TupleTableSlot	*resultSlot;
+	ScanState 		*node;
+	
+	node = &css->ss;
 
 	/*
 	 * Fetch data from node
@@ -347,7 +251,7 @@ ExecVScan(ScanState *node,
 	if (!qual && !projInfo)
 	{
 		ResetExprContext(econtext);
-		return ExecScanFetch(node, accessMtd, recheckMtd);
+		return ExecScanFetch(css, accessMtd, recheckMtd);
 	}
 
 	/*
@@ -382,7 +286,7 @@ ExecVScan(ScanState *node,
 
 		CHECK_FOR_INTERRUPTS();
 
-		slot = ExecScanFetch(node, accessMtd, recheckMtd);
+		slot = ExecScanFetch(css, accessMtd, recheckMtd);
 
 		/*
 		 * if the slot returned by the accessMtd contains NULL, then it means
@@ -451,7 +355,7 @@ ExecVScan(ScanState *node,
  * Derived from SeqNext().
  */
 static TupleTableSlot *
-VectorScanAccess(CustomScanState *node)
+VectorScanAccess(CustomScanState *css)
 {
 	HeapTuple		tuple;
 	/* 
@@ -469,18 +373,20 @@ VectorScanAccess(CustomScanState *node)
 	/* tuple batch is composed of multiple vectors. */
 	vtype		   **tb;
 
-	VectorScanState *vss = (VectorScanState *)node;
+	VectorScanState *node;
+
+	node = (VectorScanState *)css;
 	
 	/*
 	 * get information from the estate and scan state
 	 */
-	scandesc = node->ss.ss_currentScanDesc;
-	estate = node->ss.ps.state;
+	scandesc = node->css.ss.ss_currentScanDesc;
+	estate = node->css.ss.ps.state;
 	direction = estate->es_direction;
-	slot = node->ss.ss_ScanTupleSlot;
+	slot = node->css.ss.ss_ScanTupleSlot;
 	natts = slot->tts_tupleDescriptor->natts;
 
-	if (vss->scanFinish)
+	if (node->scanFinish)
 	{
 		ExecClearTuple(slot);
 		return slot;
@@ -492,10 +398,10 @@ VectorScanAccess(CustomScanState *node)
 		 * We reach here if the scan is not parallel, or if we're serially
 		 * executing a scan that was planned to be parallel.
 		 */
-		scandesc = heap_beginscan(node->ss.ss_currentRelation,
+		scandesc = heap_beginscan(node->css.ss.ss_currentRelation,
 								  estate->es_snapshot,
 								  0, NULL);
-		node->ss.ss_currentScanDesc = scandesc;
+		node->css.ss.ss_currentScanDesc = scandesc;
 	}
 
 	/* initailize tuple batch */
@@ -522,7 +428,7 @@ VectorScanAccess(CustomScanState *node)
 	
 		if (!tuple)
 		{
-			vss->scanFinish = true;
+			node->scanFinish = true;
 			break;
 		}
 
@@ -577,6 +483,37 @@ VectorScanAccess(CustomScanState *node)
 	return slot;
 }
 
+static void
+InitScanRelation(ScanState *node, EState *estate, int eflags)
+{
+	Relation	currentRelation;
+	TupleDesc	vdesc;
+
+	/*
+	 * get the relation object id from the relid'th entry in the range table,
+	 * open that relation and acquire appropriate lock on it.
+	 */
+	currentRelation = ExecOpenScanRelation(estate,
+								   ((SeqScan *) node->ps.plan)->scanrelid,
+										   eflags);
+
+	node->ss_currentRelation = currentRelation;
+
+	/* since we need to change the vtype in TupleDesc in relcache, we need to copy it. */
+	vdesc = CreateTupleDescCopyConstr(RelationGetDescr(currentRelation));
+
+	for (int i = 0; i < vdesc->natts; i++)
+	{
+		Form_pg_attribute attr = vdesc->attrs[i];
+		Oid                     vtypid = GetVtype(attr->atttypid);
+		if (vtypid != InvalidOid)
+			attr->atttypid = vtypid;
+	}
+
+	/* and report the scan tuple slot's rowtype */
+	ExecAssignScanType(node, vdesc);
+}
+
 /*
  * BeginVectorScan - A method of CustomScanState; that initializes
  * the supplied VectorScanState object, at beginning of the executor.
@@ -584,59 +521,67 @@ VectorScanAccess(CustomScanState *node)
  * Derived from InitScanRelation().
  */
 static void
-BeginVectorScan(CustomScanState *node, EState *estate, int eflags)
+BeginVectorScan(CustomScanState *css, EState *estate, int eflags)
 {
-	VectorScanState *vss = (VectorScanState *) node;
-	HeapScanDesc scandesc;
+	VectorScanState *vscanstate;
+	ScanState	*scanstate;
+	CustomScan  *cscan;
+	SeqScan		*node;
 	
+	cscan = (CustomScan *)css->ss.ps.plan;
+	node = (SeqScan *)linitial(cscan->custom_plans);
 	/*
-	 * TODO: Set TupleDesc correctly for vector node and non-vector node.
+	 * Once upon a time it was possible to have an outerPlan of a SeqScan, but
+	 * not any more.
+	 */
+	Assert(outerPlan(node) == NULL);
+	Assert(innerPlan(node) == NULL);
+
+	vscanstate = (VectorScanState*)css;
+
+	vscanstate->scanFinish = false;
+	scanstate = &vscanstate->css.ss;
+	/*
+	 * create state structure
+	 */
+	scanstate->ps.plan = (Plan *) node;
+	scanstate->ps.state = estate;
+
+	/*
+	 * Miscellaneous initialization
 	 *
+	 * create expression context for node
 	 */
-	{
-		TupleDesc	tupdesc = node->ss.ps.ps_ResultTupleSlot->tts_tupleDescriptor;
-
-		for (int i = 0; i < tupdesc->natts; i++)
-		{
-			Form_pg_attribute attr = tupdesc->attrs[i];
-			Oid			vtypid = GetVtype(attr->atttypid);
-
-			if (vtypid != InvalidOid)
-				attr->atttypid = vtypid;
-		}
-	}
-	{
-		TupleDesc	tupdesc = node->ss.ss_ScanTupleSlot->tts_tupleDescriptor;
-
-		for (int i = 0; i < tupdesc->natts; i++)
-		{
-			Form_pg_attribute attr = tupdesc->attrs[i];
-			Oid			vtypid = GetVtype(attr->atttypid);
-
-			if (vtypid != InvalidOid)
-				attr->atttypid = vtypid;
-		}
-	}
-
-	/* initialize a heapscan */
+	ExecAssignExprContext(estate, &scanstate->ps);
 
 	/*
-	 * get information from the estate and scan state
+	 * initialize child expressions
 	 */
-	scandesc = node->ss.ss_currentScanDesc;
+	scanstate->ps.targetlist = (List *)
+		ExecInitExpr((Expr *) node->plan.targetlist,
+					 (PlanState *) scanstate);
+	scanstate->ps.qual = (List *)
+		ExecInitExpr((Expr *) node->plan.qual,
+					 (PlanState *) scanstate);
 
-	{
-		/*
-		 * We reach here if the scan is not parallel, or if we're serially
-		 * executing a scan that was planned to be parallel.
-		 */
-		scandesc = heap_beginscan(node->ss.ss_currentRelation,
-								  estate->es_snapshot,
-								  0, NULL);
-		node->ss.ss_currentScanDesc = scandesc;
-	}
+	/*
+	 * tuple table initialization
+	 */
+	ExecInitResultTupleSlot(estate, &scanstate->ps);
+	ExecInitScanTupleSlot(estate, scanstate);
 
-	vss->scanFinish = false;
+	/*
+	 * initialize scan relation
+	 */
+	InitScanRelation(scanstate, estate, eflags);
+
+	scanstate->ps.ps_TupFromTlist = false;
+
+	/*
+	 * Initialize result tuple type and projection info.
+	 */
+	ExecAssignResultTypeFromTL(&scanstate->ps);
+	ExecAssignScanProjectionInfo(scanstate);
 }
 
 /*
@@ -678,9 +623,9 @@ VectorScanRecheck(CustomScanState *node, TupleTableSlot *slot)
 static TupleTableSlot *
 ExecVectorScan(CustomScanState *node)
 {
-	return ExecVScan(&node->ss,
-					 (ExecScanAccessMtd) VectorScanAccess,
-					 (ExecScanRecheckMtd) VectorScanRecheck);
+	return ExecVScan(node,
+					 (ExecVScanAccessMtd) VectorScanAccess,
+					 (ExecVScanRecheckMtd) VectorScanRecheck);
 }
 
 /*
@@ -693,22 +638,25 @@ static void
 EndVectorScan(CustomScanState *node)
 {
 	HeapScanDesc scanDesc;
+	
+	/*
+	 * get information from node
+	 */
+	scanDesc = node->ss.ss_currentScanDesc;
+
 
 	/*
 	 * close heap scan
 	 */
-
-	scanDesc = node->ss.ss_currentScanDesc;
-
 	if (scanDesc != NULL)
 		heap_endscan(scanDesc);
-}
 
+}
 /*
  * Initialize vectorscan CustomScan node.
  */
 void
-init_vectorscan(void)
+InitVectorScan(void)
 {
 
 	DefineCustomBoolVariable("enable_vectorscan",
@@ -722,9 +670,4 @@ init_vectorscan(void)
 
 	/* Register a vscan type of custom scan node */
 	RegisterCustomScanMethods(&vectorscan_scan_methods);
-	
-	/* registration of the hook to add alternative path */
-	set_rel_pathlist_next = set_rel_pathlist_hook;
-	set_rel_pathlist_hook = SetVectorScanPath;
 }
-

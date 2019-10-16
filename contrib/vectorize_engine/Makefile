@@ -6,15 +6,16 @@ EXTENSION = vectorize_engine
 
 REGRESS = vectorize_engine
 
-OBJS += vector_engine.o
-OBJS += v_scan.o
+OBJS += vectorEngine.o
 OBJS += vtype.o
-OBJS += vcheck.o
-OBJS += vconvert.o
+OBJS += nodeScan.o
+OBJS += nodeUnbatch.o
+OBJS += plan.o
+OBJS += utils.o
 
 # print vectorize info when compile
 #PG_CFLAGS = -fopt-info-vec
-
+PG_CFLAGS = -Wno-int-in-bool-context
 ifdef USE_PGXS
 PG_CONFIG = pg_config
 PGXS := $(shell $(PG_CONFIG) --pgxs)

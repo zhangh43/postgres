@@ -1,6 +1,6 @@
 /*-------------------------------------------------------------------------
  *
- * vectorconvert.c
+ * unbatch.c
  *	  TODO file description
  *
  *
@@ -16,33 +16,42 @@
 #include "optimizer/planner.h"
 #include "executor/nodeCustom.h"
 
-#include "vector_engine.h"
-#include "vcheck.h"
-#include "vconvert.h"
+#include "vectorEngine.h"
+#include "nodeUnbatch.h"
 #include "vtype.h"
+#include "utils.h"
 
 
-typedef struct VectorConvertState VectorConvertState;
-static Node *CreateVectorConvertState(CustomScan *custom_plan);
+/*
+ * UnbatchState - state object of vectorscan on executor.
+ */
+typedef struct UnbatchState
+{
+	CustomScanState	css;
+
+	TupleTableSlot *ps_ResultTupleSlot; /* slot for my result tuples */
+	TupleTableSlot *ps_ResultVTupleSlot; /* slot for my result tuples */
+
+	/* Attributes for vectorization */
+} UnbatchState;
+
+static Node *CreateUnbatchState(CustomScan *custom_plan);
 static bool FetchRowFromBatch(TupleTableSlot *vslot, TupleTableSlot *slot);
-static int iter = 0;
+/* CustomScanExecMethods */
+static void BeginUnbatch(CustomScanState *node, EState *estate, int eflags);
+static TupleTableSlot *ExecUnbatch(CustomScanState *node);
+static void EndUnbatch(CustomScanState *node);
 
-static CustomScanMethods	vectorconvert_methods = {
-	"vectorconvert",			/* CustomName */
-	CreateVectorConvertState,	/* CreateCustomScanState */
+static CustomScanMethods	unbatch_methods = {
+	"unbatch",			/* CustomName */
+	CreateUnbatchState,	/* CreateCustomScanState */
 };
 
-
-/* CustomScanExecMethods */
-static void BeginVectorConvert(CustomScanState *node, EState *estate, int eflags);
-static TupleTableSlot *ExecVectorConvert(CustomScanState *node);
-static void EndVectorConvert(CustomScanState *node);
-
-static CustomExecMethods	vectorconvert_exec_methods = {
-	"vectorconvert",			/* CustomName */
-	BeginVectorConvert,		/* BeginCustomScan */
-	ExecVectorConvert,			/* ExecCustomScan */
-	EndVectorConvert,			/* EndCustomScan */
+static CustomExecMethods	unbatch_exec_methods = {
+	"unbatch",			/* CustomName */
+	BeginUnbatch,		/* BeginCustomScan */
+	ExecUnbatch,			/* ExecCustomScan */
+	EndUnbatch,			/* EndCustomScan */
 	NULL,					/* ReScanCustomScan */
 	NULL,					/* MarkPosCustomScan */
 	NULL,					/* RestrPosCustomScan */
@@ -52,30 +61,20 @@ static CustomExecMethods	vectorconvert_exec_methods = {
 	NULL,					/* ExplainCustomScan */
 };
 
-/*
- * VectorConvertState - state object of vectorscan on executor.
- */
-struct VectorConvertState
-{
-	CustomScanState	css;
+static int iter = 0;
 
-	TupleTableSlot *ps_ResultTupleSlot; /* slot for my result tuples */
-	TupleTableSlot *ps_ResultVTupleSlot; /* slot for my result tuples */
-
-	/* Attributes for vectorization */
-};
 
 static void
-BeginVectorConvert(CustomScanState *node, EState *estate, int eflags)
+BeginUnbatch(CustomScanState *node, EState *estate, int eflags)
 {
-	VectorConvertState *vcs = (VectorConvertState*) node;
+	UnbatchState *vcs = (UnbatchState*) node;
 	CustomScan     *cscan = (CustomScan *) node->ss.ps.plan;
 
 	outerPlanState(vcs) = ExecInitNode(outerPlan(cscan), estate, eflags);
 	
 	((PlanState*)vcs)->ps_ResultTupleSlot->tts_tupleDescriptor = CreateTupleDescCopy(outerPlanState(vcs)->ps_ResultTupleSlot->tts_tupleDescriptor);
 
-	/* Convert Vtype in tupdesc to Ntype in Convert Node */
+	/* Convert Vtype in tupdesc to Ntype in unbatch Node */
     {
         TupleDesc   tupdesc = node->ss.ps.ps_ResultTupleSlot->tts_tupleDescriptor;
 
@@ -131,9 +130,9 @@ FetchRowFromBatch(TupleTableSlot *vslot, TupleTableSlot *slot){
  *
  */
 static TupleTableSlot *
-ExecVectorConvert(CustomScanState *node)
+ExecUnbatch(CustomScanState *node)
 {
-	VectorConvertState *vcs = (VectorConvertState*) node;
+	UnbatchState *vcs = (UnbatchState*) node;
 	TupleTableSlot	   *slot =  ((PlanState*)vcs)->ps_ResultTupleSlot;
 	TupleTableSlot	   *vslot = vcs->ps_ResultVTupleSlot;
 
@@ -161,7 +160,7 @@ ExecVectorConvert(CustomScanState *node)
  *
  */
 static void
-EndVectorConvert(CustomScanState *node)
+EndUnbatch(CustomScanState *node)
 {
 	PlanState  *outerPlan;
 	outerPlan = outerPlanState(node);
@@ -170,37 +169,35 @@ EndVectorConvert(CustomScanState *node)
 
 
 static Node *
-CreateVectorConvertState(CustomScan *custom_plan)
+CreateUnbatchState(CustomScan *custom_plan)
 {
-	VectorConvertState *vss = palloc0(sizeof(VectorConvertState));
+	UnbatchState *vss = palloc0(sizeof(UnbatchState));
 
 	NodeSetTag(vss, T_CustomScanState);
-	vss->css.methods = &vectorconvert_exec_methods;
+	vss->css.methods = &unbatch_exec_methods;
 
 	return (Node *) &vss->css;
 }
 
 
-void AddConvertNodeAtTop(PlannedStmt *stmt)
+/*
+ * Add unbatch Node at top to make batch to tuple
+ */
+Plan *
+AddUnbatchNodeAtTop(Plan *node)
 {
-	/* Add Convert Node at top to make batch to tuple */
     CustomScan *convert = makeNode(CustomScan);
-
-    convert->methods = &vectorconvert_methods;
-
-	convert->scan.plan.lefttree = stmt->planTree;
+    convert->methods = &unbatch_methods;
+	convert->scan.plan.lefttree = node;
     convert->scan.plan.righttree = NULL;
-	stmt->planTree = &convert->scan.plan;
+	return &convert->scan.plan;
 }
 
 /*
  * Initialize vectorscan CustomScan node.
  */
 void
-init_vector_convert(void)
+InitUnbatch(void)
 {
-
-    /* Register a vscan type of custom scan node */
-    RegisterCustomScanMethods(&vectorconvert_methods);
-
+    RegisterCustomScanMethods(&unbatch_methods);
 }
