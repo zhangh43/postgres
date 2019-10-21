@@ -60,6 +60,7 @@ vector_post_planner(Query	*parse,
 	}
 	PG_CATCH();
 	{
+		FlushErrorState();
 		stmt->planTree = savedPlanTree;
 		stmt->subplans = savedSubplan;
 	}
