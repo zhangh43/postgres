@@ -358,11 +358,6 @@ static TupleTableSlot *
 VectorScanAccess(CustomScanState *css)
 {
 	HeapTuple		tuple;
-	/* 
-	 * batchtuple store a batch in a tuple 
-	 * TODO: skip convertion between bath and heaptuple
-	 */
-	HeapTuple		batchtuple;
 	HeapScanDesc	scandesc;
 	int				natts;
 	EState		   *estate;
@@ -442,23 +437,22 @@ VectorScanAccess(CustomScanState *css)
 		}
 	}
 
+	ExecClearTuple(slot);
+
 	/* form tuple with tuple batch */
 	if (tb[0] && tb[0]->dim > 0)
 	{
-		Datum		batch_values[natts];
-		bool		batch_isnull[natts];
-
 		for (int i = 0; i < natts; i++)
 		{
-			batch_values[i] = PointerGetDatum(tb[i]);
-			batch_isnull[i] = false;
+			slot->tts_values[i]  = PointerGetDatum(tb[i]);
+			slot->tts_isnull[i] = false;
 		}
-
-		batchtuple = heap_form_tuple(slot->tts_tupleDescriptor,
-								 batch_values, batch_isnull);
+		
+		/*
+		 * And return the virtual tuple.
+		 */
+		ExecStoreVirtualTuple(slot);
 	}
-	else
-		batchtuple = NULL;
 
 	/*
 	 * save the tuple and the buffer returned to us by the access methods in
@@ -468,14 +462,6 @@ VectorScanAccess(CustomScanState *css)
 	 * that ExecStoreTuple will increment the refcount of the buffer; the
 	 * refcount will not be dropped until the tuple table slot is cleared.
 	 */
-	if (batchtuple)
-		ExecStoreTuple(batchtuple,	/* batchtuple to store */
-					   slot,	/* slot to store in */
-					   scandesc->rs_cbuf,		/* buffer associated with this
-												 * batchtuple */
-					   false);	/* don't pfree this pointer */
-	else
-		ExecClearTuple(slot);
 
 	pfree(values);
 	pfree(isnull);
