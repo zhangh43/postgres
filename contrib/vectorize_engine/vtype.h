@@ -30,8 +30,8 @@ typedef int32 int4;
 typedef struct vtype {
 	Oid     elemtype;
 	int     dim;
-	bool    isnull[1024];
-	Datum   values[1024];
+	bool    isnull[BATCHSIZE];
+	Datum   values[BATCHSIZE];
 	bool    *skipref;
 }vtype;
 
