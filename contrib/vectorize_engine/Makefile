@@ -12,6 +12,7 @@ OBJS += nodeScan.o
 OBJS += nodeUnbatch.o
 OBJS += plan.o
 OBJS += utils.o
+OBJS += execTuples.o
 
 # print vectorize info when compile
 #PG_CFLAGS = -fopt-info-vec

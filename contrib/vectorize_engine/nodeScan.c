@@ -34,6 +34,7 @@
 #include "nodes/pg_list.h"
 #include "vectorEngine.h"
 
+#include "execTuples.h"
 #include "nodeScan.h"
 #include "utils.h"
 #include "vtype.h"
@@ -70,6 +71,7 @@ static void BeginVectorScan(CustomScanState *node, EState *estate, int eflags);
 static void ReScanVectorScan(CustomScanState *node);
 static TupleTableSlot *ExecVectorScan(CustomScanState *node);
 static void EndVectorScan(CustomScanState *node);
+static void ClearCustomScanState(CustomScanState *node);
 
 static TupleTableSlot *ExecVScan(CustomScanState *node,
 									ExecVScanAccessMtd accessMtd,
@@ -367,6 +369,9 @@ VectorScanAccess(CustomScanState *css)
 	bool		   *isnull;
 	/* tuple batch is composed of multiple vectors. */
 	vtype		   **tb;
+	Buffer			buffers[BATCHSIZE];
+	int				nbuffers;
+	Buffer			curBuffer;
 
 	VectorScanState *node;
 
@@ -383,7 +388,7 @@ VectorScanAccess(CustomScanState *css)
 
 	if (node->scanFinish)
 	{
-		ExecClearTuple(slot);
+		VExecClearTuple(slot);
 		return slot;
 	}
 
@@ -410,9 +415,14 @@ VectorScanAccess(CustomScanState *css)
 		tb[i]->dim = 0;
 	}
 
+	VExecClearTuple(slot);
+
 	/* palloc intermediate values and isnull for each tuple. */
 	values = (Datum *) palloc0(natts * sizeof(Datum));
 	isnull = (bool *) palloc0(natts * sizeof(bool));
+	memset(buffers, InvalidBuffer, sizeof(Buffer) * BATCHSIZE);
+	nbuffers = 0;
+	curBuffer = InvalidBuffer;
 
 	for (int i = 0 ; i < BATCHSIZE; i++)
 	{
@@ -420,11 +430,20 @@ VectorScanAccess(CustomScanState *css)
 		 * get the next tuple from the table
 		 */
 		tuple = heap_getnext(scandesc, direction);
-	
+
 		if (!tuple)
 		{
 			node->scanFinish = true;
 			break;
+		}
+
+		/* SeqScan ensure read buffers are continous */
+		if (curBuffer != scandesc->rs_cbuf)
+		{
+			curBuffer = scandesc->rs_cbuf;
+			buffers[nbuffers] = scandesc->rs_cbuf;
+			VExecPinSlotBuffers(slot, scandesc->rs_cbuf, nbuffers);
+			nbuffers++;
 		}
 
 		heap_deform_tuple(tuple, slot->tts_tupleDescriptor, values, isnull);
@@ -436,8 +455,6 @@ VectorScanAccess(CustomScanState *css)
 			tb[j]->dim++;
 		}
 	}
-
-	ExecClearTuple(slot);
 
 	/* form tuple with tuple batch */
 	if (tb[0] && tb[0]->dim > 0)
@@ -500,6 +517,21 @@ InitScanRelation(ScanState *node, EState *estate, int eflags)
 	ExecAssignScanType(node, vdesc);
 }
 
+static void
+ClearCustomScanState(CustomScanState *node)
+{
+	/* Free the exprcontext */
+	ExecFreeExprContext(&node->ss.ps);
+
+	/* Clean out the tuple table */
+	ExecClearTuple(node->ss.ps.ps_ResultTupleSlot);
+	ExecClearTuple(node->ss.ss_ScanTupleSlot);
+
+	/* Close the heap relation */
+	if (node->ss.ss_currentRelation)
+		ExecCloseScanRelation(node->ss.ss_currentRelation);
+}
+
 /*
  * BeginVectorScan - A method of CustomScanState; that initializes
  * the supplied VectorScanState object, at beginning of the executor.
@@ -514,6 +546,9 @@ BeginVectorScan(CustomScanState *css, EState *estate, int eflags)
 	CustomScan  *cscan;
 	SeqScan		*node;
 	
+	/* clear state initialized in ExecInitCustomScan */
+	ClearCustomScanState(css);
+
 	cscan = (CustomScan *)css->ss.ps.plan;
 	node = (SeqScan *)linitial(cscan->custom_plans);
 	/*
@@ -553,8 +588,8 @@ BeginVectorScan(CustomScanState *css, EState *estate, int eflags)
 	/*
 	 * tuple table initialization
 	 */
-	ExecInitResultTupleSlot(estate, &scanstate->ps);
-	ExecInitScanTupleSlot(estate, scanstate);
+	VExecInitResultTupleSlot(estate, &scanstate->ps);
+	VExecInitScanTupleSlot(estate, scanstate);
 
 	/*
 	 * initialize scan relation
@@ -623,21 +658,40 @@ ExecVectorScan(CustomScanState *node)
 static void
 EndVectorScan(CustomScanState *node)
 {
+	Relation	relation;
 	HeapScanDesc scanDesc;
-	
+
 	/*
 	 * get information from node
 	 */
+	relation = node->ss.ss_currentRelation;
 	scanDesc = node->ss.ss_currentScanDesc;
 
+	/*
+	 * Free the exprcontext
+	 */
+	ExecFreeExprContext(&node->ss.ps);
+	
+	VExecClearTuple(node->ss.ps.ps_ResultTupleSlot);
+	VExecClearTuple(node->ss.ss_ScanTupleSlot);
 
 	/*
 	 * close heap scan
 	 */
 	if (scanDesc != NULL)
+	{
 		heap_endscan(scanDesc);
+		node->ss.ss_currentScanDesc = NULL;
+	}
+	
+	/*
+	 * close the heap relation.
+	 */
+	ExecCloseScanRelation(relation);
 
+	node->ss.ss_currentRelation = NULL;
 }
+
 /*
  * Initialize vectorscan CustomScan node.
  */
