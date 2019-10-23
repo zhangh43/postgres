@@ -21,6 +21,7 @@
 #include "catalog/pg_type.h"
 #include "utils/builtins.h"
 #include "utils/int8.h"
+#include "utils/date.h"
 #include "vtype.h"
 
 
@@ -55,10 +56,10 @@ v##type* buildv##type(int dim, bool *skip) \
  * IN function for the abstract data types
  * e.g. Datum vint2in(PG_FUNCTION_ARGS)
  */
-#define _FUNCTION_IN(type, typeoid) \
-PG_FUNCTION_INFO_V1(v##type##in); \
+#define _FUNCTION_IN(type, fname, typeoid) \
+PG_FUNCTION_INFO_V1(v##fname##in); \
 Datum \
-v##type##in(PG_FUNCTION_ARGS) \
+v##fname##in(PG_FUNCTION_ARGS) \
 { \
     char *intString = PG_GETARG_CSTRING(0); \
     vtype *res = NULL; \
@@ -78,7 +79,7 @@ v##type##in(PG_FUNCTION_ARGS) \
         Assert(intString - start < MAX_NUM_LEN); \
         strncpy(tempstr, start, intString - start); \
         tempstr[intString - start] = 0; \
-        res->values[n] = DirectFunctionCall1(type##in, CStringGetDatum(tempstr)); \
+        res->values[n] = DirectFunctionCall1(fname##in, CStringGetDatum(tempstr)); \
         while (*intString && !isspace((unsigned char) *intString)) \
             intString++; \
     } \
@@ -98,10 +99,10 @@ v##type##in(PG_FUNCTION_ARGS) \
  * OUT function for the abstract data types
  * e.g. Datum vint2out(PG_FUNCTION_ARGS)
  */
-#define _FUNCTION_OUT(type, typeoid) \
-PG_FUNCTION_INFO_V1(v##type##out); \
+#define _FUNCTION_OUT(type, fname, typeoid) \
+PG_FUNCTION_INFO_V1(v##fname##out); \
 Datum \
-v##type##out(PG_FUNCTION_ARGS) \
+v##fname##out(PG_FUNCTION_ARGS) \
 { \
 	vtype * arg1 = (v##type *) PG_GETARG_POINTER(0); \
 	int len = arg1->dim; \
@@ -113,7 +114,7 @@ v##type##out(PG_FUNCTION_ARGS) \
 	{ \
 		if (i != 0) \
 			*rp++ = ' '; \
-		strcat(rp, DatumGetCString(DirectFunctionCall1(type##out, arg1->values[i])));\
+		strcat(rp, DatumGetCString(DirectFunctionCall1(fname##out, arg1->values[i])));\
 		while (*++rp != '\0'); \
 	} \
 	*rp = '\0'; \
@@ -351,18 +352,20 @@ v##type##const_type##cmpstr(PG_FUNCTION_ARGS) \
     FUNCTION_CMP(type, XTYPE1) \
     FUNCTION_CMP_RCONST(type, XTYPE1)
 
-#define FUNCTION_BUILD(type, typeoid) \
+#define FUNCTION_BUILD(type,fname, typeoid) \
     _FUNCTION_BUILD(type, typeoid) \
-    _FUNCTION_IN(type, typeoid) \
-    _FUNCTION_OUT(type, typeoid)
+    _FUNCTION_IN(type,fname, typeoid) \
+    _FUNCTION_OUT(type, fname, typeoid)
 
 //Macro Level 0
-FUNCTION_BUILD(int2, INT2OID)
-FUNCTION_BUILD(int4, INT4OID)
-FUNCTION_BUILD(int8, INT8OID)
-FUNCTION_BUILD(float4, FLOAT4OID)
-FUNCTION_BUILD(float8, FLOAT8OID)
-FUNCTION_BUILD(bool, BOOLOID)
+FUNCTION_BUILD(int2, int2, INT2OID)
+FUNCTION_BUILD(int4, int4, INT4OID)
+FUNCTION_BUILD(int8, int8, INT8OID)
+FUNCTION_BUILD(float4, float4, FLOAT4OID)
+FUNCTION_BUILD(float8, float8, FLOAT8OID)
+FUNCTION_BUILD(bool, bool, BOOLOID)
+FUNCTION_BUILD(text, text, TEXTOID)
+FUNCTION_BUILD(date, date_, TEXTOID)
 
 FUNCTION_OP_ALL(int2, Int16)
 FUNCTION_OP_ALL(int4, Int32)

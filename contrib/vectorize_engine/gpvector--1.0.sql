@@ -91,6 +91,15 @@ CREATE FUNCTION vboolin(cstring) RETURNS vbool AS '$libdir/vectorize_engine' LAN
 CREATE FUNCTION vboolout(vbool) RETURNS cstring AS '$libdir/vectorize_engine' LANGUAGE C IMMUTABLE STRICT;
 CREATE TYPE vbool ( INPUT = vboolin, OUTPUT = vboolout, element = bool, storage=external );
 
+CREATE TYPE vtext;
+CREATE FUNCTION vtextin(cstring) RETURNS vtext AS '$libdir/vectorize_engine' LANGUAGE C IMMUTABLE STRICT;
+CREATE FUNCTION vtextout(vtext) RETURNS cstring AS '$libdir/vectorize_engine' LANGUAGE C IMMUTABLE STRICT;
+CREATE TYPE vtext ( INPUT = vtextin, OUTPUT = vtextout, element = text, storage=external );
+
+CREATE TYPE vdate;
+CREATE FUNCTION vdate_in(cstring) RETURNS vdate AS '$libdir/vectorize_engine' LANGUAGE C IMMUTABLE STRICT;
+CREATE FUNCTION vdate_out(vdate) RETURNS cstring AS '$libdir/vectorize_engine' LANGUAGE C IMMUTABLE STRICT;
+CREATE TYPE vdate ( INPUT = vdate_in, OUTPUT = vdate_out, element = date, storage=external );
 /*
 CREATE TYPE vdateadt;
 CREATE FUNCTION vdateadtin(cstring) RETURNS vdateadt as '$libdir/vectorize_engine' LANGUAGE C IMMUTABLE STRICT;
