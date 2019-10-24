@@ -38,9 +38,7 @@
 #include "nodeScan.h"
 #include "utils.h"
 #include "vtype.h"
-
-#define slot_get_values(slot)	((slot)->tts_values)
-#define slot_get_isnull(slot)	((slot)->tts_isnull)
+#include "executor.h"
 
 /*
  * VectorScanState - state object of vectorscan on executor.
@@ -316,7 +314,7 @@ ExecVScan(CustomScanState *css,
 		 * when the qual is nil ... saves only a few cycles, but they add up
 		 * ...
 		 */
-		if (!qual || ExecQual(qual, econtext, false))
+		if (!qual || VExecScanQual(qual, econtext, false))
 		{
 			/*
 			 * Found a satisfactory scan tuple.
@@ -365,6 +363,7 @@ VectorScanAccess(CustomScanState *css)
 	EState		   *estate;
 	ScanDirection	direction;
 	TupleTableSlot *slot;
+	VectorTupleSlot *vslot;
 	Datum		   *values;
 	bool		   *isnull;
 	/* tuple batch is composed of multiple vectors. */
@@ -372,6 +371,7 @@ VectorScanAccess(CustomScanState *css)
 	Buffer			buffers[BATCHSIZE];
 	int				nbuffers;
 	Buffer			curBuffer;
+	int				row, col;
 
 	VectorScanState *node;
 
@@ -406,13 +406,13 @@ VectorScanAccess(CustomScanState *css)
 
 	/* initailize tuple batch */
 	tb = palloc(sizeof(vtype *) * natts);
-	for (int i = 0; i < natts; i++)
+	for (col = 0; col < natts; col++)
 	{
 		Oid			typid;
 
-		typid = slot->tts_tupleDescriptor->attrs[i]->atttypid;
-		tb[i] = buildvtype(typid, BATCHSIZE, NULL);
-		tb[i]->dim = 0;
+		typid = slot->tts_tupleDescriptor->attrs[col]->atttypid;
+		tb[col] = buildvtype(typid, BATCHSIZE, NULL);
+		tb[col]->dim = 0;
 	}
 
 	VExecClearTuple(slot);
@@ -424,7 +424,7 @@ VectorScanAccess(CustomScanState *css)
 	nbuffers = 0;
 	curBuffer = InvalidBuffer;
 
-	for (int i = 0 ; i < BATCHSIZE; i++)
+	for (row = 0 ; row < BATCHSIZE; row++)
 	{
 		/*
 		 * get the next tuple from the table
@@ -448,21 +448,24 @@ VectorScanAccess(CustomScanState *css)
 
 		heap_deform_tuple(tuple, slot->tts_tupleDescriptor, values, isnull);
 
-		for (int j = 0; j < natts; j++)
+		for (col = 0; col < natts; col++)
 		{
-			tb[j]->values[i] = values[j];
-			tb[j]->isnull[i] = isnull[j];
-			tb[j]->dim++;
+			tb[col]->values[row] = values[col];
+			tb[col]->isnull[row] = isnull[col];
+			tb[col]->dim++;
 		}
 	}
 
+	vslot = (VectorTupleSlot *)slot;
+	vslot->dim = row;
 	/* form tuple with tuple batch */
-	if (tb[0] && tb[0]->dim > 0)
+	if (row > 0)
 	{
-		for (int i = 0; i < natts; i++)
+		for (col = 0; col < natts; col++)
 		{
-			slot->tts_values[i]  = PointerGetDatum(tb[i]);
-			slot->tts_isnull[i] = false;
+			slot->tts_values[col]  = PointerGetDatum(tb[col]);
+			/* tts_isnull not used yet */
+			slot->tts_isnull[col] = false;
 		}
 		
 		/*
