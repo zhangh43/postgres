@@ -1,5 +1,5 @@
-#ifndef VECTOR_ENGINE_EXECUTOR_H
-#define VECTOR_ENGINE_EXECUTOR_H
+#ifndef VECTOR_ENGINE_EXEC_TUPLE_H
+#define VECTOR_ENGINE_EXEC_TUPLE_H
 
 #include "postgres.h"
 
