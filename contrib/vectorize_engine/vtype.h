@@ -177,6 +177,7 @@ TYPE_HEADER(float8, FLOAT8OID)
 TYPE_HEADER(bool, BOOLOID)
 TYPE_HEADER(text, TEXTOID)
 TYPE_HEADER(date, DATEOID)
+TYPE_HEADER(bpchar, BPCHAROID)
 
 extern vtype* buildvtype(Oid elemtype,int dim,bool *skip);
 extern void destroyvtype(vtype** vt);

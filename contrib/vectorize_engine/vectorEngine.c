@@ -60,7 +60,13 @@ vector_post_planner(Query	*parse,
 	}
 	PG_CATCH();
 	{
+		ErrorData  *edata;
+		edata = CopyErrorData();
 		FlushErrorState();
+		ereport(NOTICE,
+				(errcode(ERRCODE_INTERNAL_ERROR),
+				 errmsg("query can't be vectorized"),
+				 errdetail("%s", edata->message)));
 		stmt->planTree = savedPlanTree;
 		stmt->subplans = savedSubplan;
 	}

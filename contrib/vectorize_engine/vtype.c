@@ -290,6 +290,12 @@ v##type##const_type##cmpstr(PG_FUNCTION_ARGS) \
     __FUNCTION_OP(type1, XTYPE1, type2, XTYPE2, *, mul) \
     __FUNCTION_OP(type1, XTYPE1, type2, XTYPE2, /, div)
 
+#define _FUNCTION_DATE_OP_CONST(type, XTYPE, const_type, CONST_ARG_MACRO) \
+    __FUNCTION_OP_RCONST(type, XTYPE, const_type, CONST_ARG_MACRO, +, pl)  \
+    __FUNCTION_OP_RCONST(type, XTYPE, const_type, CONST_ARG_MACRO, -, mi)  \
+    __FUNCTION_OP_LCONST(type, XTYPE, const_type, CONST_ARG_MACRO, +, pl)  \
+    __FUNCTION_OP_LCONST(type, XTYPE, const_type, CONST_ARG_MACRO, -, mi)
+
 #define _FUNCTION_OP_CONST(type, XTYPE, const_type, CONST_ARG_MACRO) \
     __FUNCTION_OP_RCONST(type, XTYPE, const_type, CONST_ARG_MACRO, +, pl)  \
     __FUNCTION_OP_RCONST(type, XTYPE, const_type, CONST_ARG_MACRO, -, mi)  \
@@ -323,6 +329,11 @@ v##type##const_type##cmpstr(PG_FUNCTION_ARGS) \
     _FUNCTION_OP(type, XTYPE1, int8, Int64) \
     _FUNCTION_OP(type, XTYPE1, float4, Float4) \
     _FUNCTION_OP(type, XTYPE1, float8, Float8)
+
+#define FUNCTION_DATE_OP_RCONST(type, XTYPE) \
+    _FUNCTION_DATE_OP_CONST(type, XTYPE, DateADT, PG_GETARG_DATEADT) \
+    _FUNCTION_DATE_OP_CONST(type, XTYPE, Interval, PG_GETARG_INTERVAL_P) \
+    _FUNCTION_DATE_OP_CONST(type, XTYPE, int4, PG_GETARG_INT32)
 
 #define FUNCTION_OP_RCONST(type, XTYPE) \
     _FUNCTION_OP_CONST(type, XTYPE, int2, PG_GETARG_INT16) \
@@ -365,7 +376,7 @@ FUNCTION_BUILD(float4, float4, FLOAT4OID)
 FUNCTION_BUILD(float8, float8, FLOAT8OID)
 FUNCTION_BUILD(bool, bool, BOOLOID)
 FUNCTION_BUILD(text, text, TEXTOID)
-FUNCTION_BUILD(date, date_, TEXTOID)
+FUNCTION_BUILD(bpchar, bpchar, BPCHAROID)
 
 FUNCTION_OP_ALL(int2, Int16)
 FUNCTION_OP_ALL(int4, Int32)
@@ -373,4 +384,3 @@ FUNCTION_OP_ALL(int8, Int64)
 FUNCTION_OP_ALL(float4, Float4)
 FUNCTION_OP_ALL(float8, Float8)
 FUNCTION_OP_ALL(bool, Bool)
-

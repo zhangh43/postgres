@@ -15,9 +15,9 @@ typedef struct VecTypeHashEntry
 static HTAB *hashMapN2V = NULL;
 static HTAB *hashMapV2N = NULL;
 
-#define BUILTIN_TYPE_NUM 4
-const char *typenames[] = { "int4", "bool", "text", "date" };
-const char *vtypenames[] = { "vint4", "vbool", "vtext", "date" };
+#define BUILTIN_TYPE_NUM 10
+const char *typenames[] = { "int2", "int4", "int8", "float4", "float8", "bool", "text", "date", "bpchar", "timestamp"};
+const char *vtypenames[] = { "vint2", "vint4", "vint8", "vfloat4", "vfloat8", "vbool", "vtext", "vdate", "vbpchar", "vtimestamp"};
 /*
  * map non-vectorized type to vectorized type.
  * To scan the PG_TYPE is inefficient, so we create a hashtable to map
