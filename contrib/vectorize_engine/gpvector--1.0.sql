@@ -89,23 +89,27 @@ CREATE TYPE vfloat8 ( INPUT = vfloat8in, OUTPUT = vfloat8out, storage = plain, i
 CREATE TYPE vbool;
 CREATE FUNCTION vboolin(cstring) RETURNS vbool AS '$libdir/vectorize_engine' LANGUAGE C IMMUTABLE STRICT;
 CREATE FUNCTION vboolout(vbool) RETURNS cstring AS '$libdir/vectorize_engine' LANGUAGE C IMMUTABLE STRICT;
-CREATE TYPE vbool ( INPUT = vboolin, OUTPUT = vboolout, element = bool, storage=external );
+CREATE TYPE vbool ( INPUT = vboolin, OUTPUT = vboolout, element = bool, storage=plain );
 
 CREATE TYPE vtext;
 CREATE FUNCTION vtextin(cstring) RETURNS vtext AS '$libdir/vectorize_engine' LANGUAGE C IMMUTABLE STRICT;
 CREATE FUNCTION vtextout(vtext) RETURNS cstring AS '$libdir/vectorize_engine' LANGUAGE C IMMUTABLE STRICT;
-CREATE TYPE vtext ( INPUT = vtextin, OUTPUT = vtextout, element = text, storage=external );
+CREATE TYPE vtext ( INPUT = vtextin, OUTPUT = vtextout, element = text, storage=plain );
 
 CREATE TYPE vdate;
 CREATE FUNCTION vdate_in(cstring) RETURNS vdate AS '$libdir/vectorize_engine' LANGUAGE C IMMUTABLE STRICT;
 CREATE FUNCTION vdate_out(vdate) RETURNS cstring AS '$libdir/vectorize_engine' LANGUAGE C IMMUTABLE STRICT;
-CREATE TYPE vdate ( INPUT = vdate_in, OUTPUT = vdate_out, element = date, storage=external );
-/*
-CREATE TYPE vdateadt;
-CREATE FUNCTION vdateadtin(cstring) RETURNS vdateadt as '$libdir/vectorize_engine' LANGUAGE C IMMUTABLE STRICT;
-CREATE FUNCTION vdateadtout(vdateadt) RETURNS cstring AS '$libdir/vectorize_engine' LANGUAGE C IMMUTABLE STRICT;
-CREATE TYPE vdateadt ( INPUT = vdateadtin, OUTPUT = vdateadtout, element = date , storage=external);
-*/
+CREATE TYPE vdate ( INPUT = vdate_in, OUTPUT = vdate_out, element = date, storage=plain );
+
+CREATE TYPE vtimestamp;
+CREATE FUNCTION vtimestamp_in(cstring) RETURNS vtimestamp AS '$libdir/vectorize_engine' LANGUAGE C IMMUTABLE STRICT;
+CREATE FUNCTION vtimestamp_out(vtimestamp) RETURNS cstring AS '$libdir/vectorize_engine' LANGUAGE C IMMUTABLE STRICT;
+CREATE TYPE vtimestamp ( INPUT = vtimestamp_in, OUTPUT = vtimestamp_out, element = timestamp, storage=plain );
+
+CREATE TYPE vbpchar;
+CREATE FUNCTION vbpcharin(cstring) RETURNS vbpchar AS '$libdir/vectorize_engine' LANGUAGE C IMMUTABLE STRICT;
+CREATE FUNCTION vbpcharout(vbpchar) RETURNS cstring AS '$libdir/vectorize_engine' LANGUAGE C IMMUTABLE STRICT;
+CREATE TYPE vbpchar ( INPUT = vbpcharin, OUTPUT = vbpcharout, element = bpchar, storage=plain );
 
 -- create operators for the vectorized types
 
@@ -1022,6 +1026,13 @@ CREATE FUNCTION float8vfloat8mul(float8, vfloat8) RETURNS vfloat8 AS '$libdir/ve
 CREATE OPERATOR * ( leftarg = float8, rightarg = vfloat8, procedure = float8vfloat8mul, commutator = / );
 CREATE FUNCTION float8vfloat8div(float8, vfloat8) RETURNS vfloat8 AS '$libdir/vectorize_engine' LANGUAGE C IMMUTABLE STRICT;
 CREATE OPERATOR / ( leftarg = float8, rightarg = vfloat8, procedure = float8vfloat8div, commutator = * );
+
+CREATE FUNCTION vdate_le_timestamp(vdate, timestamp) RETURNS vbool AS '$libdir/vectorize_engine' LANGUAGE C IMMUTABLE STRICT;
+CREATE OPERATOR <= ( leftarg = vdate, rightarg = timestamp, procedure = vdate_le_timestamp, commutator = <= );
+CREATE FUNCTION vdate_mi_interval(vdate, interval) RETURNS vtimestamp AS '$libdir/vectorize_engine' LANGUAGE C IMMUTABLE STRICT;
+CREATE OPERATOR - ( leftarg = vdate, rightarg = interval, procedure = vdate_mi_interval, commutator = - );
+CREATE FUNCTION vdate_le(vdate, date) RETURNS vdate AS '$libdir/vectorize_engine' LANGUAGE C IMMUTABLE STRICT;
+CREATE OPERATOR <= ( leftarg = vdate, rightarg = date, procedure = vdate_le, commutator = <= );
 
 /*
 CREATE FUNCTION vdateadt_eq(vdateadt, vdateadt) RETURNS vbool AS '$libdir/vectorize_engine' LANGUAGE C IMMUTABLE STRICT;

@@ -48,7 +48,9 @@ getNodeReturnType(Node *node)
 		case T_Const:
 			return ((Const*)node)->consttype;
 		default:
-			elog(ERROR, "Operator arguments cannot be vectorized");
+		{
+			elog(ERROR, "Node return type %d not supported", nodeTag(node));
+		}
 	}
 }
 
@@ -75,7 +77,9 @@ VectorizeMutator(Node *node, VectorizedContext *ctx)
 				newnode = (Var*)plan_tree_mutator(node, VectorizeMutator, ctx);
 				vtype = GetVtype(newnode->vartype);
 				if(InvalidOid == vtype)
-					elog(ERROR, "Operator arguments cannot be vectorized");
+				{
+					elog(ERROR, "Cannot find vtype for type %d", newnode->vartype);
+				}
 				newnode->vartype = vtype;
 				return (Node *)newnode;
 			}
@@ -91,10 +95,14 @@ VectorizeMutator(Node *node, VectorizedContext *ctx)
 				newnode = (OpExpr*)plan_tree_mutator(node, VectorizeMutator, ctx);
 				rettype = GetVtype(newnode->opresulttype);
 				if (InvalidOid == rettype)
-					elog(ERROR, "Operator arguments cannot be vectorized");
+				{
+					elog(ERROR, "Cannot find vtype for type %d", newnode->opresulttype);
+				}
 
 				if (list_length(newnode->args) != 2)
-					elog(ERROR, "Operator arguments cannot be vectorized");
+				{
+					elog(ERROR, "Unary operator not supported");
+				}
 				ltype = getNodeReturnType(linitial(newnode->args));
 				rtype = getNodeReturnType(lsecond(newnode->args));
 
@@ -102,13 +110,15 @@ VectorizeMutator(Node *node, VectorizedContext *ctx)
 				tuple = oper(NULL, list_make1(makeString(get_opname(newnode->opno))),
 						ltype, rtype, true, -1);
 				if(NULL == tuple)
-					elog(ERROR, "Operator arguments cannot be vectorized");
+				{
+					elog(ERROR, "Vectorized operator not found");
+				}
 
 				voper = (Form_pg_operator)GETSTRUCT(tuple);
 				if(voper->oprresult != rettype)
 				{
 					ReleaseSysCache(tuple);
-					elog(ERROR, "Operator arguments cannot be vectorized");
+					elog(ERROR, "Vectorize operator rettype not correct");
 				}
 
 				newnode->opresulttype = rettype;
@@ -221,6 +231,16 @@ plan_tree_mutator(Node *node,
 				return (Node *)newnode;
 			}
 
+		case T_FuncExpr:
+			{
+				FuncExpr	   *expr = (FuncExpr *)node;
+				FuncExpr	   *newnode;
+
+				FLATCOPY(newnode, expr, FuncExpr);
+				MUTATE(newnode->args, expr->args, List *);
+				return (Node *)newnode;
+			}
+
 		case T_List:
 			{
 				/*
@@ -252,7 +272,7 @@ plan_tree_mutator(Node *node,
 			}
 
 		default:
-			elog(ERROR, "node type cannot be vectorized: %d", nodeTag(node));
+			elog(ERROR, "node type %d not supported", nodeTag(node));
 			break;
 	}
 }
