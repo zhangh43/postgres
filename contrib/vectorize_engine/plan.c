@@ -2,11 +2,15 @@
 #include "access/htup.h"
 #include "catalog/pg_collation.h"
 #include "catalog/pg_operator.h"
+#include "catalog/pg_type.h"
+#include "catalog/pg_proc.h"
 #include "miscadmin.h"
 #include "access/htup_details.h"
 #include "nodes/nodeFuncs.h"
 #include "optimizer/var.h"
 #include "parser/parse_oper.h"
+#include "parser/parse_func.h"
+#include "parser/parse_coerce.h"
 #include "nodes/makefuncs.h"
 #include "nodes/nodeFuncs.h"
 #include "nodes/primnodes.h"
@@ -14,11 +18,13 @@
 #include "nodes/relation.h"
 #include "nodes/nodes.h"
 #include "nodes/parsenodes.h"
+#include "utils/acl.h"
 #include "utils/lsyscache.h"
 #include "utils/syscache.h"
 
 #include "plan.h"
 #include "nodeScan.h"
+#include "nodeAgg.h"
 #include "utils.h"
 
 static void mutate_plan_fields(Plan *newplan, Plan *oldplan, Node *(*mutator) (), void *context);
@@ -84,6 +90,51 @@ VectorizeMutator(Node *node, VectorizedContext *ctx)
 				return (Node *)newnode;
 			}
 
+		case T_Aggref:
+			{
+				Aggref	*newnode;
+				Oid		oldfnOid;
+				Oid		retype;
+				HeapTuple	proctup;
+				Form_pg_proc procform;
+				List	*funcname = NULL;
+				int		i;
+				Oid		*argtypes;
+				char	*proname;
+				bool		retset;
+				int			nvargs;
+				Oid			vatype;
+				Oid		   *true_oid_array;
+				FuncDetailCode	fdresult;
+
+				newnode = (Aggref *)plan_tree_mutator(node, VectorizeMutator, ctx);
+				oldfnOid = newnode->aggfnoid;
+
+				proctup = SearchSysCache1(PROCOID, ObjectIdGetDatum(oldfnOid));
+				if (!HeapTupleIsValid(proctup))
+					elog(ERROR, "cache lookup failed for function %u", oldfnOid);
+				procform = (Form_pg_proc) GETSTRUCT(proctup);
+				proname = NameStr(procform->proname);
+				funcname = lappend(funcname, makeString(proname));
+
+				argtypes = palloc(sizeof(Oid) * procform->pronargs);
+				for (i = 0; i < procform->pronargs; i++)
+					argtypes[i] = GetVtype(procform->proargtypes.values[i]);
+				
+				fdresult = func_get_detail(funcname, NIL, NIL,
+						procform->pronargs, argtypes, false, false,
+						&newnode->aggfnoid, &retype, &retset,
+						&nvargs, &vatype,
+						&true_oid_array, NULL);
+
+				ReleaseSysCache(proctup);
+
+				//TODO check validation of fdresult.
+				if (fdresult != FUNCDETAIL_AGGREGATE || !OidIsValid(newnode->aggfnoid))
+					elog(ERROR, "aggreate function not defined");
+				return (Node *)newnode;
+			}
+
 		case T_OpExpr:
 			{
 				OpExpr	*newnode;
@@ -92,7 +143,7 @@ VectorizeMutator(Node *node, VectorizedContext *ctx)
 				HeapTuple			tuple;
 
 				/* mutate OpExpr itself in plan_tree_mutator firstly. */
-				newnode = (OpExpr*)plan_tree_mutator(node, VectorizeMutator, ctx);
+				newnode = (OpExpr *)plan_tree_mutator(node, VectorizeMutator, ctx);
 				rettype = GetVtype(newnode->opresulttype);
 				if (InvalidOid == rettype)
 				{
@@ -203,6 +254,21 @@ plan_tree_mutator(Node *node,
 				return (Node *)cscan;
 			}
 
+		case T_Agg:
+			{
+				CustomScan	*cscan;
+				Agg			*vagg;
+	
+				if (((Agg *)node)->aggstrategy != AGG_PLAIN)
+					elog(ERROR, "Non plain agg is not supported");
+
+				cscan = MakeCustomScanForAgg();
+				FLATCOPY(vagg, node, Agg);
+				cscan->custom_plans = lappend(cscan->custom_plans, vagg);
+
+				SCANMUTATE(vagg, node);
+				return (Node *)cscan;
+			}
 		case T_Const:
 			{
 				Const	   *oldnode = (Const *) node;
@@ -270,6 +336,22 @@ plan_tree_mutator(Node *node,
 				MUTATE(newnode->expr, targetentry->expr, Expr *);
 				return (Node *) newnode;
 			}
+		case T_Aggref:
+			{
+				Aggref	   *aggref = (Aggref *) node;
+				Aggref	   *newnode;
+
+				FLATCOPY(newnode, aggref, Aggref);
+				/* assume mutation doesn't change types of arguments */
+				newnode->aggargtypes = list_copy(aggref->aggargtypes);
+				MUTATE(newnode->aggdirectargs, aggref->aggdirectargs, List *);
+				MUTATE(newnode->args, aggref->args, List *);
+				MUTATE(newnode->aggorder, aggref->aggorder, List *);
+				MUTATE(newnode->aggdistinct, aggref->aggdistinct, List *);
+				MUTATE(newnode->aggfilter, aggref->aggfilter, Expr *);
+				return (Node *) newnode;
+			}
+			break;
 
 		default:
 			elog(ERROR, "node type %d not supported", nodeTag(node));
