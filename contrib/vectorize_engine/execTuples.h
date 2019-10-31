@@ -23,5 +23,6 @@ extern void VExecPinSlotBuffers(TupleTableSlot *slot, Buffer buffer, int idx);
  */
 extern void VExecInitResultTupleSlot(EState *estate, PlanState *planstate);
 extern void VExecInitScanTupleSlot(EState *estate, ScanState *scanstate);
-
+extern TupleTableSlot *VExecInitExtraTupleSlot(EState *estate);
+extern void VExecAssignResultTypeFromTL(PlanState *planstate);
 #endif

@@ -9,6 +9,7 @@ REGRESS = vectorize_engine
 OBJS += vectorEngine.o
 OBJS += vtype.o
 OBJS += nodeScan.o
+OBJS += nodeAgg.o
 OBJS += nodeUnbatch.o
 OBJS += plan.o
 OBJS += utils.o
@@ -16,6 +17,9 @@ OBJS += execTuples.o
 OBJS += execQual.o
 OBJS += vtype/vdate.o
 OBJS += vtype/vtimestamp.o
+OBJS += vtype/vint.o
+OBJS += vtype/vpseudotypes.o
+OBJS += vtype/vvarchar.o
 
 # print vectorize info when compile
 #PG_CFLAGS = -fopt-info-vec

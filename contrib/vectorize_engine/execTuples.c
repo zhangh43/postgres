@@ -92,9 +92,12 @@
 #include "utils/typcache.h"
 
 #include "execTuples.h"
+#include "vtype.h"
+#include "utils.h"
 
 static TupleTableSlot *VMakeTupleTableSlot(void);
 static TupleTableSlot *VExecAllocTableSlot(List **tupleTable);
+static void VExecAssignResultType(PlanState *planstate, TupleDesc tupDesc);
 
 /* --------------------------------
  *		MakeTupleTableSlot
@@ -169,6 +172,15 @@ VExecInitScanTupleSlot(EState *estate, ScanState *scanstate)
 	scanstate->ss_ScanTupleSlot = VExecAllocTableSlot(&estate->es_tupleTable);
 }
 
+/* ----------------
+ *		ExecInitExtraTupleSlot
+ * ----------------
+ */
+TupleTableSlot *
+VExecInitExtraTupleSlot(EState *estate)
+{
+	return VExecAllocTableSlot(&estate->es_tupleTable);
+}
 
 TupleTableSlot *
 VExecClearTuple(TupleTableSlot *slot)	/* slot in which to store tuple */
@@ -234,4 +246,58 @@ VExecPinSlotBuffers(TupleTableSlot *slot, Buffer buffer, int idx)
 	
 	vslot->tts_buffers[idx] = buffer;
 	IncrBufferRefCount(buffer);
+}
+
+
+/* ----------------
+ */
+void
+VExecAssignResultTypeFromTL(PlanState *planstate)
+{
+	bool		hasoid;
+	TupleDesc	tupDesc;
+
+	if (ExecContextForcesOids(planstate, &hasoid))
+	{
+		/* context forces OID choice; hasoid is now set correctly */
+	}
+	else
+	{
+		/* given free choice, don't leave space for OIDs in result tuples */
+		hasoid = false;
+	}
+
+	/*
+	 * ExecTypeFromTL needs the parse-time representation of the tlist, not a
+	 * list of ExprStates.  This is good because some plan nodes don't bother
+	 * to set up planstate->targetlist ...
+	 */
+	tupDesc = ExecTypeFromTL(planstate->plan->targetlist, hasoid);
+	VExecAssignResultType(planstate, tupDesc);
+}
+
+
+/* ----------------
+ *		ExecAssignResultType
+ * ----------------
+ */
+static void
+VExecAssignResultType(PlanState *planstate, TupleDesc tupDesc)
+{
+	TupleDesc	vdesc;
+
+	TupleTableSlot *slot = planstate->ps_ResultTupleSlot;
+
+	/* since we need to change the vtype in TupleDesc in relcache, we need to copy it. */
+	vdesc = CreateTupleDescCopyConstr(tupDesc);
+
+	for (int i = 0; i < vdesc->natts; i++)
+	{
+		Form_pg_attribute attr = vdesc->attrs[i];
+		Oid                     vtypid = GetVtype(attr->atttypid);
+		if (vtypid != InvalidOid)
+			attr->atttypid = vtypid;
+	}
+
+	ExecSetSlotDescriptor(slot, vdesc);
 }

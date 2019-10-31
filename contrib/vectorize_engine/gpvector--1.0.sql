@@ -111,6 +111,16 @@ CREATE FUNCTION vbpcharin(cstring) RETURNS vbpchar AS '$libdir/vectorize_engine'
 CREATE FUNCTION vbpcharout(vbpchar) RETURNS cstring AS '$libdir/vectorize_engine' LANGUAGE C IMMUTABLE STRICT;
 CREATE TYPE vbpchar ( INPUT = vbpcharin, OUTPUT = vbpcharout, element = bpchar, storage=plain );
 
+CREATE TYPE vvarchar;
+CREATE FUNCTION vvarcharin(cstring) RETURNS vvarchar AS '$libdir/vectorize_engine' LANGUAGE C IMMUTABLE STRICT;
+CREATE FUNCTION vvarcharout(vvarchar) RETURNS cstring AS '$libdir/vectorize_engine' LANGUAGE C IMMUTABLE STRICT;
+CREATE TYPE vvarchar ( INPUT = vvarcharin, OUTPUT = vvarcharout, element = varchar, storage=plain );
+
+CREATE TYPE vany;
+CREATE FUNCTION vany_in(cstring) RETURNS vany AS '$libdir/vectorize_engine' LANGUAGE C IMMUTABLE STRICT;
+CREATE FUNCTION vany_out(vany) RETURNS cstring AS '$libdir/vectorize_engine' LANGUAGE C IMMUTABLE STRICT;
+CREATE TYPE vany ( INPUT = vany_in, OUTPUT = vany_out, storage=plain );
+
 -- create operators for the vectorized types
 
 CREATE FUNCTION vint2vint2gt(vint2, vint2) RETURNS vbool AS '$libdir/vectorize_engine' LANGUAGE C IMMUTABLE STRICT;
@@ -1080,6 +1090,7 @@ CREATE OPERATOR - ( leftarg = vdateadt, rightarg = int4, procedure = vdateadt_mi
 
 --create sum aggregate functions
 
+/*
 CREATE FUNCTION int8vint2pl(int8, vint2) returns int8 as '$libdir/vectorize_engine' language c immutable;
 CREATE AGGREGATE sum(vint2) ( 
     sfunc = int8vint2pl, 
@@ -1090,7 +1101,6 @@ CREATE AGGREGATE sum(vint4) (
     sfunc = int8vint4pl, 
     stype = int8);
     
-/*
 CREATE FUNCTION vint8_accum(numeric, vint8) returns numeric as '$libdir/vectorize_engine' language c immutable;
 CREATE AGGREGATE sum(vint8) ( 
     sfunc = vint8_accum, 
@@ -1173,3 +1183,14 @@ create AGGREGATE veccount(*) (
     sfunc = vec_inc_any, 
     stype = int8);
 */
+
+
+CREATE FUNCTION vint8inc_any(int8, vany) returns int8 as '$libdir/vectorize_engine' language c immutable;
+create AGGREGATE count(vany) ( 
+    sfunc = vint8inc_any, 
+    stype = int8);
+
+CREATE FUNCTION int8vint4pl(int8, vint4) returns int8 as '$libdir/vectorize_engine' language c immutable;
+CREATE AGGREGATE sum(vint4) ( 
+    sfunc = int8vint4pl, 
+    stype = int8);

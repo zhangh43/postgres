@@ -604,7 +604,7 @@ BeginVectorScan(CustomScanState *css, EState *estate, int eflags)
 	/*
 	 * Initialize result tuple type and projection info.
 	 */
-	ExecAssignResultTypeFromTL(&scanstate->ps);
+	VExecAssignResultTypeFromTL(&scanstate->ps);
 	ExecAssignScanProjectionInfo(scanstate);
 }
 
