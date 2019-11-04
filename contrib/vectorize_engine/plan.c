@@ -53,6 +53,8 @@ getNodeReturnType(Node *node)
 			return ((Var*)node)->vartype;
 		case T_Const:
 			return ((Const*)node)->consttype;
+		case T_OpExpr:
+			return ((OpExpr*)node)->opresulttype;
 		default:
 		{
 			elog(ERROR, "Node return type %d not supported", nodeTag(node));
@@ -259,7 +261,7 @@ plan_tree_mutator(Node *node,
 				CustomScan	*cscan;
 				Agg			*vagg;
 	
-				if (((Agg *)node)->aggstrategy != AGG_PLAIN)
+				if (((Agg *)node)->aggstrategy != AGG_PLAIN && ((Agg *)node)->aggstrategy != AGG_HASHED)
 					elog(ERROR, "Non plain agg is not supported");
 
 				cscan = MakeCustomScanForAgg();

@@ -490,11 +490,10 @@ static TupleTableSlot *project_aggregates(AggState *aggstate);
 static Bitmapset *find_unaggregated_cols(AggState *aggstate);
 static bool find_unaggregated_cols_walker(Node *node, Bitmapset **colnos);
 static void build_hash_table(AggState *aggstate);
-static AggHashEntry lookup_hash_entry(AggState *aggstate,
+static AggHashEntry *lookup_hash_entry(AggState *aggstate,
 				  TupleTableSlot *inputslot);
 static TupleTableSlot *agg_retrieve_direct(AggState *aggstate);
 static void agg_fill_hash_table(AggState *aggstate);
-static TupleTableSlot *agg_retrieve_hash_table(AggState *aggstate);
 static Datum GetAggInitVal(Datum textInitVal, Oid transtype);
 static void build_pertrans_for_aggref(AggStatePerTrans pertrans,
 						  AggState *aggstate, EState *estate,
@@ -525,14 +524,20 @@ typedef struct VectorAggState
 {
 	CustomScanState	css;
 	AggState		*aggstate;
+	TupleTableSlot	*resultSlot;
 } VectorAggState;
 
 static void ClearCustomScanState(CustomScanState *node);
 static AggState *VExecInitAgg(Agg *node, EState *estate, int eflags);
-static TupleTableSlot *VExecAgg(AggState *node);
+static TupleTableSlot *VExecAgg(VectorAggState *node);
 static void VExecEndAgg(AggState *node);
 static void convert_agg_value_to_batch(AggState *aggstate, AggStatePerAgg peraggs);
+static void advance_aggregates_vectorize(AggState *aggstate, AggHashEntry *entries);
+static void advance_transition_function_vectorize(AggState *aggstate,
+							AggStatePerTrans pertrans,
+							AggHashEntry *entries);
 
+static TupleTableSlot *agg_retrieve_hash_table(VectorAggState *aggstate);
 /* CustomScanMethods */
 static Node *CreateVectorAggState(CustomScan *custom_plan);
 
@@ -585,6 +590,9 @@ BeginVectorAgg(CustomScanState *css, EState *estate, int eflags)
 	VectorAggState *vaggstate;
 	CustomScan  *cscan;
 	Agg		*node;
+	TupleTableSlot	*slot;
+	TupleDesc	vdesc;
+	int			i;
 
 	/* clear state initialized in ExecInitCustomScan */
 	ClearCustomScanState(css);
@@ -594,6 +602,25 @@ BeginVectorAgg(CustomScanState *css, EState *estate, int eflags)
 	node = (Agg *)linitial(cscan->custom_plans);
 
 	vaggstate->aggstate = VExecInitAgg(node, estate, eflags);
+	slot = VExecInitExtraTupleSlot(estate);
+	vaggstate->resultSlot = slot;
+
+	vdesc = vaggstate->aggstate->ss.ps.ps_ResultTupleSlot->tts_tupleDescriptor;
+	ExecSetSlotDescriptor(vaggstate->resultSlot, vdesc);
+
+	/* initailize tuple batch */
+	for (i = 0; i < vdesc->natts; i++)
+	{
+		Oid			typid;
+		vtype		*column;
+
+		typid = slot->tts_tupleDescriptor->attrs[i]->atttypid;
+		column = buildvtype(typid, BATCHSIZE, NULL);
+		column->dim = 0;
+		slot->tts_values[i]  = PointerGetDatum(column);
+		/* tts_isnull not used yet */
+		slot->tts_isnull[i] = false;
+	}
 	//TODO:
 	vaggstate->css.ss.ps.ps_ResultTupleSlot =  vaggstate->aggstate->ss.ps.ps_ResultTupleSlot;
 }
@@ -603,7 +630,7 @@ ExecVectorAgg(CustomScanState *css)
 {
 	VectorAggState *vaggstate;
 	vaggstate = (VectorAggState*)css;
-	return VExecAgg(vaggstate->aggstate);
+	return VExecAgg(vaggstate);
 }
 
 static void
@@ -655,6 +682,128 @@ convert_agg_value_to_batch(AggState *aggstate, AggStatePerAgg peraggs)
 	}
 }
 
+static void
+advance_transition_function_vectorize(AggState *aggstate,
+							AggStatePerTrans pertrans,
+							AggHashEntry *entries)
+{
+	FunctionCallInfo fcinfo = &pertrans->transfn_fcinfo;
+	MemoryContext oldContext;
+#if 0
+	Datum		newVal;
+#endif
+
+	if (pertrans->transfn.fn_strict)
+	{
+		/*
+		 * For a strict transfn, nothing happens when there's a NULL input; we
+		 * just keep the prior transValue.
+		 */
+		int			numTransInputs = pertrans->numTransInputs;
+		int			i;
+
+		for (i = 1; i <= numTransInputs; i++)
+		{
+			if (fcinfo->argnull[i])
+				return;
+		}
+
+#if 0
+		//TODO: min/max need this
+		if (pergroupstate->noTransValue)
+		{
+			/*
+			 * transValue has not been initialized. This is the first non-NULL
+			 * input value. We use it as the initial value for transValue. (We
+			 * already checked that the agg's input type is binary-compatible
+			 * with its transtype, so straight copy here is OK.)
+			 *
+			 * We must copy the datum into aggcontext if it is pass-by-ref. We
+			 * do not need to pfree the old transValue, since it's NULL.
+			 */
+			oldContext = MemoryContextSwitchTo(
+											   aggstate->aggcontexts[aggstate->current_set]->ecxt_per_tuple_memory);
+			pergroupstate->transValue = datumCopy(fcinfo->arg[1],
+												  pertrans->transtypeByVal,
+												  pertrans->transtypeLen);
+			pergroupstate->transValueIsNull = false;
+			pergroupstate->noTransValue = false;
+			MemoryContextSwitchTo(oldContext);
+			return;
+		}
+		if (pergroupstate->transValueIsNull)
+		{
+			/*
+			 * Don't call a strict function with NULL inputs.  Note it is
+			 * possible to get here despite the above tests, if the transfn is
+			 * strict *and* returned a NULL on a prior cycle. If that happens
+			 * we will propagate the NULL all the way to the end.
+			 */
+			return;
+		}
+#endif
+	}
+
+	/* We run the transition functions in per-input-tuple memory context */
+	oldContext = MemoryContextSwitchTo(aggstate->tmpcontext->ecxt_per_tuple_memory);
+
+	/* set up aggstate->curpertrans for AggGetAggref() */
+	aggstate->curpertrans = pertrans;
+
+	/*
+	 * OK to call the transition function
+	 */
+	fcinfo->arg[0] = PointerGetDatum(entries);
+	fcinfo->argnull[0] = false;
+	fcinfo->isnull = false;		/* just in case transfn doesn't set it */
+
+	//newVal = FunctionCallInvoke(fcinfo);
+	FunctionCallInvoke(fcinfo);
+
+	aggstate->curpertrans = NULL;
+
+#if 0
+	//TODO:
+	/*
+	 * If pass-by-ref datatype, must copy the new value into aggcontext and
+	 * free the prior transValue.  But if transfn returned a pointer to its
+	 * first input, we don't need to do anything.  Also, if transfn returned a
+	 * pointer to a R/W expanded object that is already a child of the
+	 * aggcontext, assume we can adopt that value without copying it.
+	 */
+	if (!pertrans->transtypeByVal &&
+		DatumGetPointer(newVal) != DatumGetPointer(pergroupstate->transValue))
+	{
+		if (!fcinfo->isnull)
+		{
+			MemoryContextSwitchTo(aggstate->aggcontexts[aggstate->current_set]->ecxt_per_tuple_memory);
+			if (DatumIsReadWriteExpandedObject(newVal,
+											   false,
+											   pertrans->transtypeLen) &&
+				MemoryContextGetParent(DatumGetEOHP(newVal)->eoh_context) == CurrentMemoryContext)
+				 /* do nothing */ ;
+			else
+				newVal = datumCopy(newVal,
+								   pertrans->transtypeByVal,
+								   pertrans->transtypeLen);
+		}
+		if (!pergroupstate->transValueIsNull)
+		{
+			if (DatumIsReadWriteExpandedObject(pergroupstate->transValue,
+											   false,
+											   pertrans->transtypeLen))
+				DeleteExpandedObject(pergroupstate->transValue);
+			else
+				pfree(DatumGetPointer(pergroupstate->transValue));
+		}
+	}
+
+	pergroupstate->transValue = newVal;
+	pergroupstate->transValueIsNull = fcinfo->isnull;
+
+#endif
+	MemoryContextSwitchTo(oldContext);
+}
 /*
  * Interface to get the custom scan plan for vector scan
  */
@@ -1023,7 +1172,7 @@ advance_transition_function(AggState *aggstate,
  * When called, CurrentMemoryContext should be the per-query context.
  */
 static void
-advance_aggregates(AggState *aggstate, AggStatePerGroup pergroup)
+advance_aggregates_vectorize(AggState *aggstate, AggHashEntry *entries)
 {
 	int			transno;
 	int			setno = 0;
@@ -1097,8 +1246,111 @@ advance_aggregates(AggState *aggstate, AggStatePerGroup pergroup)
 			Assert(slot->tts_nvalid >= numTransInputs);
 			for (i = 0; i < numTransInputs; i++)
 			{
-				fcinfo->arg[i + 1] = slot->tts_values[i];
-				fcinfo->argnull[i + 1] = slot->tts_isnull[i];
+				fcinfo->arg[i + 2] = slot->tts_values[i];
+				fcinfo->argnull[i + 2] = slot->tts_isnull[i];
+			}
+
+			for (setno = 0; setno < numGroupingSets; setno++)
+			{
+				//AggStatePerGroup pergroupstate = &pergroup[transno + (setno * numTrans)];
+				int groupOffset = offsetof(AggHashEntryData, pergroup) + 2 * sizeof(AggStatePerGroup) * (transno + (setno * numTrans));
+				aggstate->current_set = setno;
+
+				fcinfo->arg[1] = Int32GetDatum(groupOffset);
+				fcinfo->argnull[1] = false;
+				advance_transition_function_vectorize(aggstate, pertrans, entries);
+			}
+		}
+	}
+}
+
+/*
+ * Advance each aggregate transition state for one input tuple.  The input
+ * tuple has been stored in tmpcontext->ecxt_outertuple, so that it is
+ * accessible to ExecEvalExpr.  pergroup is the array of per-group structs to
+ * use (this might be in a hashtable entry).
+ *
+ * When called, CurrentMemoryContext should be the per-query context.
+ */
+static void
+advance_aggregates(AggState *aggstate, AggStatePerGroup pergroup)
+{
+	int			transno;
+	int			setno = 0;
+	int			numGroupingSets = Max(aggstate->phase->numsets, 1);
+	int			numTrans = aggstate->numtrans;
+
+	for (transno = 0; transno < numTrans; transno++)
+	{
+		AggStatePerTrans pertrans = &aggstate->pertrans[transno];
+		ExprState  *filter = pertrans->aggfilter;
+		int			numTransInputs = pertrans->numTransInputs;
+		int			i;
+		TupleTableSlot *slot;
+
+		/* Skip anything FILTERed out */
+		if (filter)
+		{
+			Datum		res;
+			bool		isnull;
+
+			res = ExecEvalExprSwitchContext(filter, aggstate->tmpcontext,
+											&isnull, NULL);
+			if (isnull || !DatumGetBool(res))
+				continue;
+		}
+
+		/* Evaluate the current input expressions for this aggregate */
+		slot = ExecProject(pertrans->evalproj, NULL);
+
+		if (pertrans->numSortCols > 0)
+		{
+			/* DISTINCT and/or ORDER BY case */
+			Assert(slot->tts_nvalid == pertrans->numInputs);
+
+			/*
+			 * If the transfn is strict, we want to check for nullity before
+			 * storing the row in the sorter, to save space if there are a lot
+			 * of nulls.  Note that we must only check numTransInputs columns,
+			 * not numInputs, since nullity in columns used only for sorting
+			 * is not relevant here.
+			 */
+			if (pertrans->transfn.fn_strict)
+			{
+				for (i = 0; i < numTransInputs; i++)
+				{
+					if (slot->tts_isnull[i])
+						break;
+				}
+				if (i < numTransInputs)
+					continue;
+			}
+
+			for (setno = 0; setno < numGroupingSets; setno++)
+			{
+				/* OK, put the tuple into the tuplesort object */
+				if (pertrans->numInputs == 1)
+					tuplesort_putdatum(pertrans->sortstates[setno],
+									   slot->tts_values[0],
+									   slot->tts_isnull[0]);
+				else
+					tuplesort_puttupleslot(pertrans->sortstates[setno], slot);
+			}
+		}
+		else
+		{
+			/* We can apply the transition function immediately */
+			FunctionCallInfo fcinfo = &pertrans->transfn_fcinfo;
+
+			/* Load values into fcinfo */
+			/* Start from 1, since the 0th arg will be the transition value */
+			Assert(slot->tts_nvalid >= numTransInputs);
+			fcinfo->arg[1] = Int32GetDatum(-1);
+			fcinfo->argnull[1] = false;
+			for (i = 0; i < numTransInputs; i++)
+			{
+				fcinfo->arg[i + 2] = slot->tts_values[i];
+				fcinfo->argnull[i + 2] = slot->tts_isnull[i];
 			}
 
 			for (setno = 0; setno < numGroupingSets; setno++)
@@ -1978,44 +2230,50 @@ hash_agg_entry_size(int numAggs)
  *
  * When called, CurrentMemoryContext should be the per-query context.
  */
-static AggHashEntry
+static AggHashEntry*
 lookup_hash_entry(AggState *aggstate, TupleTableSlot *inputslot)
 {
 	TupleTableSlot *hashslot = aggstate->hashslot;
+	VectorTupleSlot *vslot;
 	ListCell   *l;
-	AggHashEntry entry;
+	AggHashEntry *entries;
 	bool		isnew;
+	int			i;
 
-	/* if first time through, initialize hashslot by cloning input slot */
-	if (hashslot->tts_tupleDescriptor == NULL)
-	{
-		ExecSetSlotDescriptor(hashslot, inputslot->tts_tupleDescriptor);
-		/* Make sure all unused columns are NULLs */
-		ExecStoreAllNullTuple(hashslot);
-	}
+	/* hashslot's td should already be initialized */
+	Assert(hashslot->tts_tupleDescriptor != NULL);
 
+	vslot = (VectorTupleSlot *)inputslot;
+
+	entries = palloc(sizeof(AggHashEntry) * vslot->dim);
+	
 	/* transfer just the needed columns into hashslot */
 	slot_getsomeattrs(inputslot, linitial_int(aggstate->hash_needed));
-	foreach(l, aggstate->hash_needed)
-	{
-		int			varNumber = lfirst_int(l) - 1;
 
-		hashslot->tts_values[varNumber] = inputslot->tts_values[varNumber];
-		hashslot->tts_isnull[varNumber] = inputslot->tts_isnull[varNumber];
+	for (i = 0; i < vslot->dim; i++)
+	{
+		foreach(l, aggstate->hash_needed)
+		{
+			vtype *column;
+			int			varNumber = lfirst_int(l) - 1;
+			column = (vtype *)DatumGetPointer(inputslot->tts_values[varNumber]);
+			hashslot->tts_values[varNumber] = column->values[i];
+			hashslot->tts_isnull[varNumber] = column->isnull[i];
+		}
+
+		/* find or create the hashtable entry using the filtered tuple */
+		entries[i] = (AggHashEntry) LookupTupleHashEntry(aggstate->hashtable,
+				hashslot,
+				&isnew);
+
+		if (isnew)
+		{
+			/* initialize aggregates for new tuple group */
+			initialize_aggregates(aggstate, entries[i]->pergroup, 0);
+		}
 	}
 
-	/* find or create the hashtable entry using the filtered tuple */
-	entry = (AggHashEntry) LookupTupleHashEntry(aggstate->hashtable,
-												hashslot,
-												&isnew);
-
-	if (isnew)
-	{
-		/* initialize aggregates for new tuple group */
-		initialize_aggregates(aggstate, entry->pergroup, 0);
-	}
-
-	return entry;
+	return entries;
 }
 
 /*
@@ -2032,10 +2290,12 @@ lookup_hash_entry(AggState *aggstate, TupleTableSlot *inputslot)
  *	  the result tuple.
  */
 static TupleTableSlot *
-VExecAgg(AggState *node)
+VExecAgg(VectorAggState *vnode)
 {
+	AggState	*node;
 	TupleTableSlot *result;
 
+	node = vnode->aggstate;
 	/*
 	 * Check to see if we're still projecting out tuples from a previous agg
 	 * tuple (because there is a function-returning-set in the projection
@@ -2065,7 +2325,7 @@ VExecAgg(AggState *node)
 			case AGG_HASHED:
 				if (!node->table_filled)
 					agg_fill_hash_table(node);
-				result = agg_retrieve_hash_table(node);
+				result = agg_retrieve_hash_table(vnode);
 				break;
 			default:
 				result = agg_retrieve_direct(node);
@@ -2416,7 +2676,7 @@ static void
 agg_fill_hash_table(AggState *aggstate)
 {
 	ExprContext *tmpcontext;
-	AggHashEntry entry;
+	AggHashEntry *entries;
 	TupleTableSlot *outerslot;
 
 	/*
@@ -2439,13 +2699,16 @@ agg_fill_hash_table(AggState *aggstate)
 		tmpcontext->ecxt_outertuple = outerslot;
 
 		/* Find or build hashtable entry for this tuple's group */
-		entry = lookup_hash_entry(aggstate, outerslot);
+		entries = lookup_hash_entry(aggstate, outerslot);
 
 		/* Advance the aggregates */
 		if (DO_AGGSPLIT_COMBINE(aggstate->aggsplit))
-			combine_aggregates(aggstate, entry->pergroup);
+		{
+			elog(ERROR, "vectorize agg combine not supported.");
+			//combine_aggregates(aggstate, entry->pergroup);
+		}
 		else
-			advance_aggregates(aggstate, entry->pergroup);
+			advance_aggregates_vectorize(aggstate, entries);
 
 		/* Reset per-input-tuple context after each tuple */
 		ResetExprContext(tmpcontext);
@@ -2460,15 +2723,21 @@ agg_fill_hash_table(AggState *aggstate)
  * ExecAgg for hashed case: phase 2, retrieving groups from hash table
  */
 static TupleTableSlot *
-agg_retrieve_hash_table(AggState *aggstate)
+agg_retrieve_hash_table(VectorAggState *vaggstate)
 {
+	AggState	*aggstate;
 	ExprContext *econtext;
 	AggStatePerAgg peragg;
 	AggStatePerGroup pergroup;
 	AggHashEntry entry;
 	TupleTableSlot *firstSlot;
 	TupleTableSlot *result;
+	VectorTupleSlot *vslot;
+	TupleDesc		vdesc;
+	int				i;
+	vtype			*column;
 
+	aggstate = vaggstate->aggstate;
 	/*
 	 * get state info from node
 	 */
@@ -2476,6 +2745,9 @@ agg_retrieve_hash_table(AggState *aggstate)
 	econtext = aggstate->ss.ps.ps_ExprContext;
 	peragg = aggstate->peragg;
 	firstSlot = aggstate->ss.ss_ScanTupleSlot;
+
+	vslot = (VectorTupleSlot *)vaggstate->resultSlot;
+	vdesc = aggstate->ss.ps.ps_ResultTupleSlot->tts_tupleDescriptor;
 
 	/*
 	 * We loop retrieving groups until we find one satisfying
@@ -2491,7 +2763,7 @@ agg_retrieve_hash_table(AggState *aggstate)
 		{
 			/* No more entries in hashtable, so done */
 			aggstate->agg_done = TRUE;
-			return NULL;
+			break;
 		}
 
 		/*
@@ -2521,9 +2793,24 @@ agg_retrieve_hash_table(AggState *aggstate)
 		 */
 		econtext->ecxt_outertuple = firstSlot;
 
+
 		result = project_aggregates(aggstate);
-		if (result)
-			return result;
+		for(i = 0; i < vdesc->natts; i++)
+		{
+			column = (vtype *)DatumGetPointer(vslot->tts.tts_values[i]);
+			column->values[vslot->dim] = result->tts_values[i];
+			column->dim++;
+		}
+		vslot->dim++;
+
+		if(vslot->dim == BATCHSIZE)
+			break;
+	}
+
+	if (vslot->dim > 0)
+	{
+		ExecStoreVirtualTuple((TupleTableSlot *)vslot);
+		return (TupleTableSlot *)vslot;
 	}
 
 	/* No more groups */
@@ -2640,7 +2927,7 @@ VExecInitAgg(Agg *node, EState *estate, int eflags)
 	 */
 	VExecInitScanTupleSlot(estate, &aggstate->ss);
 	VExecInitResultTupleSlot(estate, &aggstate->ss.ps);
-	aggstate->hashslot = VExecInitExtraTupleSlot(estate);
+	aggstate->hashslot = ExecInitExtraTupleSlot(estate);
 	aggstate->sort_slot = VExecInitExtraTupleSlot(estate);
 
 	/*
@@ -2677,6 +2964,26 @@ VExecInitAgg(Agg *node, EState *estate, int eflags)
 	if (node->chain)
 		ExecSetSlotDescriptor(aggstate->sort_slot,
 						 aggstate->ss.ss_ScanTupleSlot->tts_tupleDescriptor);
+
+	/* hashslot should convert vectorized td to plain td */
+	{
+		TupleDesc	plain_desc;
+
+		/* since we need to change the vtype in TupleDesc in relcache, we need to copy it. */
+		plain_desc = CreateTupleDescCopyConstr(aggstate->ss.ss_ScanTupleSlot->tts_tupleDescriptor);
+
+		for (int i = 0; i < plain_desc->natts; i++)
+		{
+			Form_pg_attribute attr = plain_desc->attrs[i];
+			Oid                     plain_typid = GetNtype(attr->atttypid);
+			if (plain_typid != InvalidOid)
+				attr->atttypid = plain_typid;
+		}
+
+		ExecSetSlotDescriptor(aggstate->hashslot, plain_desc);
+		/* Make sure all unused columns are NULLs */
+		ExecStoreAllNullTuple(aggstate->hashslot);
+	}
 
 	/*
 	 * Initialize result tuple type and projection info.

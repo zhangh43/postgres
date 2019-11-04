@@ -285,13 +285,14 @@ static void
 VExecAssignResultType(PlanState *planstate, TupleDesc tupDesc)
 {
 	TupleDesc	vdesc;
+	int			i;
 
 	TupleTableSlot *slot = planstate->ps_ResultTupleSlot;
 
 	/* since we need to change the vtype in TupleDesc in relcache, we need to copy it. */
 	vdesc = CreateTupleDescCopyConstr(tupDesc);
 
-	for (int i = 0; i < vdesc->natts; i++)
+	for (i = 0; i < vdesc->natts; i++)
 	{
 		Form_pg_attribute attr = vdesc->attrs[i];
 		Oid                     vtypid = GetVtype(attr->atttypid);
@@ -300,4 +301,20 @@ VExecAssignResultType(PlanState *planstate, TupleDesc tupDesc)
 	}
 
 	ExecSetSlotDescriptor(slot, vdesc);
+
+	/* initailize tuple batch */
+	for (i = 0; i < vdesc->natts; i++)
+	{
+		Oid			typid;
+		vtype		*column;
+
+		typid = slot->tts_tupleDescriptor->attrs[i]->atttypid;
+		column = buildvtype(typid, BATCHSIZE, NULL);
+		column->dim = 0;
+		slot->tts_values[i]  = PointerGetDatum(column);
+		/* tts_isnull not used yet */
+		slot->tts_isnull[i] = false;
+	}
+
+
 }

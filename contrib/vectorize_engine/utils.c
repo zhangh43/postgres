@@ -109,13 +109,13 @@ Oid GetNtype(Oid vtype)
 			if (vtypid == InvalidOid)
 				return InvalidOid;
 			/* insert int4->vint4 mapping manually, may construct from catalog in future */
-			entry = hash_search(hashMapN2V, &vtypid, HASH_ENTER, &found);
+			entry = hash_search(hashMapV2N, &vtypid, HASH_ENTER, &found);
 			entry->dest = typid;
 		}
 	}
 
 	/* find the vectorized type in hash table */
-	entry = hash_search(hashMapN2V, &vtype, HASH_FIND, &found);
+	entry = hash_search(hashMapV2N, &vtype, HASH_FIND, &found);
 	if(found)
 		return entry->dest;
 

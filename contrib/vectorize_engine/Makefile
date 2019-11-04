@@ -18,6 +18,7 @@ OBJS += execQual.o
 OBJS += vtype/vdate.o
 OBJS += vtype/vtimestamp.o
 OBJS += vtype/vint.o
+OBJS += vtype/vfloat.o
 OBJS += vtype/vpseudotypes.o
 OBJS += vtype/vvarchar.o
 

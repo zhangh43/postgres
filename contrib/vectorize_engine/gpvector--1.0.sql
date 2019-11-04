@@ -1190,7 +1190,25 @@ create AGGREGATE count(vany) (
     sfunc = vint8inc_any, 
     stype = int8);
 
-CREATE FUNCTION int8vint4pl(int8, vint4) returns int8 as '$libdir/vectorize_engine' language c immutable;
+CREATE FUNCTION vint4_sum(int8, vint4) returns int8 as '$libdir/vectorize_engine' language c immutable;
 CREATE AGGREGATE sum(vint4) ( 
-    sfunc = int8vint4pl, 
+    sfunc = vint4_sum, 
     stype = int8);
+
+CREATE FUNCTION vint8inc(int8) returns int8 as '$libdir/vectorize_engine' language c immutable strict;
+create AGGREGATE count(*) ( 
+    sfunc = vint8inc, 
+    stype = int8);
+
+CREATE FUNCTION vfloat8pl(float8, vfloat8) returns float8 as '$libdir/vectorize_engine' language c immutable;
+create AGGREGATE sum(vfloat8) ( 
+    sfunc = vfloat8pl, 
+    stype = float8);
+
+CREATE FUNCTION vfloat8_accum(bytea, vfloat8) returns bytea as '$libdir/vectorize_engine' language c immutable strict;
+CREATE FUNCTION vfloat8_avg(bytea) returns float8 as '$libdir/vectorize_engine' language c immutable;
+create AGGREGATE avg(vfloat8) ( 
+    sfunc = vfloat8_accum, 
+    finalfunc = vfloat8_avg, 
+	INITCOND = '{0,0,0}',
+    stype = bytea);
