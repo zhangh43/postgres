@@ -186,6 +186,7 @@ TupleTableSlot *
 VExecClearTuple(TupleTableSlot *slot)	/* slot in which to store tuple */
 {
 	VectorTupleSlot *vslot = (VectorTupleSlot *)slot;
+	vtype	*column;
 	int i;
 	/*
 	 * sanity checks
@@ -226,7 +227,13 @@ VExecClearTuple(TupleTableSlot *slot)	/* slot in which to store tuple */
 		ReleaseBuffer(vslot->tts_buffers[i]);
 		vslot->tts_buffers[i++] = InvalidBuffer;
 	}
+	vslot->dim = 0;
 
+	for (i = 0; i < slot->tts_tupleDescriptor->natts; i++)
+	{
+		column = (vtype *)DatumGetPointer(slot->tts_values[i]);
+		column->dim = 0;
+	}
 	return slot;
 }
 

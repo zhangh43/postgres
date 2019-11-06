@@ -367,11 +367,11 @@ VectorScanAccess(CustomScanState *css)
 	Datum		   *values;
 	bool		   *isnull;
 	/* tuple batch is composed of multiple vectors. */
-	vtype		   **tb;
 	Buffer			buffers[BATCHSIZE];
 	int				nbuffers;
 	Buffer			curBuffer;
 	int				row, col;
+	vtype			*column;
 
 	VectorScanState *node;
 
@@ -402,17 +402,6 @@ VectorScanAccess(CustomScanState *css)
 								  estate->es_snapshot,
 								  0, NULL);
 		node->css.ss.ss_currentScanDesc = scandesc;
-	}
-
-	/* initailize tuple batch */
-	tb = palloc(sizeof(vtype *) * natts);
-	for (col = 0; col < natts; col++)
-	{
-		Oid			typid;
-
-		typid = slot->tts_tupleDescriptor->attrs[col]->atttypid;
-		tb[col] = buildvtype(typid, BATCHSIZE, NULL);
-		tb[col]->dim = 0;
 	}
 
 	VExecClearTuple(slot);
@@ -450,9 +439,10 @@ VectorScanAccess(CustomScanState *css)
 
 		for (col = 0; col < natts; col++)
 		{
-			tb[col]->values[row] = values[col];
-			tb[col]->isnull[row] = isnull[col];
-			tb[col]->dim++;
+			column = (vtype *)DatumGetPointer(slot->tts_values[col]);
+			column->values[row] = values[col];
+			column->isnull[row] = isnull[col];
+			column->dim++;
 		}
 	}
 
@@ -461,13 +451,6 @@ VectorScanAccess(CustomScanState *css)
 	/* form tuple with tuple batch */
 	if (row > 0)
 	{
-		for (col = 0; col < natts; col++)
-		{
-			slot->tts_values[col]  = PointerGetDatum(tb[col]);
-			/* tts_isnull not used yet */
-			slot->tts_isnull[col] = false;
-		}
-		
 		/*
 		 * And return the virtual tuple.
 		 */
@@ -494,6 +477,8 @@ InitScanRelation(ScanState *node, EState *estate, int eflags)
 {
 	Relation	currentRelation;
 	TupleDesc	vdesc;
+	TupleTableSlot *slot;
+	int 		i;
 
 	/*
 	 * get the relation object id from the relid'th entry in the range table,
@@ -508,7 +493,7 @@ InitScanRelation(ScanState *node, EState *estate, int eflags)
 	/* since we need to change the vtype in TupleDesc in relcache, we need to copy it. */
 	vdesc = CreateTupleDescCopyConstr(RelationGetDescr(currentRelation));
 
-	for (int i = 0; i < vdesc->natts; i++)
+	for (i = 0; i < vdesc->natts; i++)
 	{
 		Form_pg_attribute attr = vdesc->attrs[i];
 		Oid                     vtypid = GetVtype(attr->atttypid);
@@ -518,6 +503,21 @@ InitScanRelation(ScanState *node, EState *estate, int eflags)
 
 	/* and report the scan tuple slot's rowtype */
 	ExecAssignScanType(node, vdesc);
+
+	slot = ((ScanState *)node)->ss_ScanTupleSlot;
+	/* initailize tuple batch */
+	for (i = 0; i < vdesc->natts; i++)
+	{
+		Oid			typid;
+		vtype		*column;
+
+		typid = slot->tts_tupleDescriptor->attrs[i]->atttypid;
+		column = buildvtype(typid, BATCHSIZE, NULL);
+		column->dim = 0;
+		slot->tts_values[i]  = PointerGetDatum(column);
+		/* tts_isnull not used yet */
+		slot->tts_isnull[i] = false;
+	}
 }
 
 static void
