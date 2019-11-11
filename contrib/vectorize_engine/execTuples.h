@@ -13,7 +13,8 @@ typedef struct VectorTupleSlot
 {
 	TupleTableSlot	tts;
 	int32			dim;
-	Buffer			tts_buffers[BATCHSIZE];	
+	Buffer			tts_buffers[BATCHSIZE];
+	bool			skip[BATCHSIZE];
 } VectorTupleSlot;
 
 extern TupleTableSlot *VExecClearTuple(TupleTableSlot *slot);

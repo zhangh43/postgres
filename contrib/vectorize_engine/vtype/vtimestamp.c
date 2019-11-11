@@ -28,10 +28,12 @@ vtimestamp_timestamp_cmp_internal(vtimestamp *vdt1, Timestamp dt2)
 	vint4	*result;
 	Timestamp dt1;	
 
-	result = buildvint4(vdt1->dim, NULL);
+	result = buildvtype(INT4OID,vdt1->dim, vdt1->skipref);
 #ifdef HAVE_INT64_TIMESTAMP
-	for (i = 0; i < vdt1->dim; i++ )
+	for (i = 0; i < BATCHSIZE; i++ )
 	{
+		if (vdt1->skipref[i])
+			continue;
 		dt1 = DatumGetTimestamp(vdt1->values[i]);
 		result->values[i] = Int32GetDatum((dt1 < dt2) ? -1 : ((dt1 > dt2) ? 1 : 0));
 	}
@@ -61,10 +63,12 @@ vtimestamp_pl_interval(PG_FUNCTION_ARGS)
 	vtimestamp	*result;
 	int i;
 
-	result = buildvtimestamp(vts->dim, NULL);
+	result = buildvtimestamp(vts->dim, vts->skipref);
 
 	for(i = 0; i< vts->dim; i++)
 	{
+		if (vts->skipref[i])
+			continue;
 		timestamp = DatumGetTimestamp(vts->values[i]);
 		if (TIMESTAMP_NOT_FINITE(timestamp))
 			result->values[i] = TimestampGetDatum(timestamp);

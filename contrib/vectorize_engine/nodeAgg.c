@@ -591,6 +591,7 @@ BeginVectorAgg(CustomScanState *css, EState *estate, int eflags)
 	CustomScan  *cscan;
 	Agg		*node;
 	TupleTableSlot	*slot;
+	VectorTupleSlot	*vslot;
 	TupleDesc	vdesc;
 	int			i;
 
@@ -605,6 +606,8 @@ BeginVectorAgg(CustomScanState *css, EState *estate, int eflags)
 	slot = VExecInitExtraTupleSlot(estate);
 	vaggstate->resultSlot = slot;
 
+	vslot = (VectorTupleSlot *)slot;
+
 	vdesc = vaggstate->aggstate->ss.ps.ps_ResultTupleSlot->tts_tupleDescriptor;
 	ExecSetSlotDescriptor(vaggstate->resultSlot, vdesc);
 
@@ -615,8 +618,7 @@ BeginVectorAgg(CustomScanState *css, EState *estate, int eflags)
 		vtype		*column;
 
 		typid = slot->tts_tupleDescriptor->attrs[i]->atttypid;
-		column = buildvtype(typid, BATCHSIZE, NULL);
-		column->dim = 0;
+		column = buildvtype(typid, BATCHSIZE, vslot->skip);
 		slot->tts_values[i]  = PointerGetDatum(column);
 		/* tts_isnull not used yet */
 		slot->tts_isnull[i] = false;
@@ -2234,7 +2236,7 @@ static AggHashEntry*
 lookup_hash_entry(AggState *aggstate, TupleTableSlot *inputslot)
 {
 	TupleTableSlot *hashslot = aggstate->hashslot;
-	VectorTupleSlot *vslot;
+	VectorTupleSlot *vslot = (VectorTupleSlot *)inputslot;
 	ListCell   *l;
 	AggHashEntry *entries;
 	bool		isnew;
@@ -2243,15 +2245,16 @@ lookup_hash_entry(AggState *aggstate, TupleTableSlot *inputslot)
 	/* hashslot's td should already be initialized */
 	Assert(hashslot->tts_tupleDescriptor != NULL);
 
-	vslot = (VectorTupleSlot *)inputslot;
-
-	entries = palloc(sizeof(AggHashEntry) * vslot->dim);
+	entries = palloc(sizeof(AggHashEntry) * BATCHSIZE);
 	
 	/* transfer just the needed columns into hashslot */
 	slot_getsomeattrs(inputslot, linitial_int(aggstate->hash_needed));
 
-	for (i = 0; i < vslot->dim; i++)
+	for (i = 0; i < BATCHSIZE; i++)
 	{
+		if (vslot->skip[i])
+			continue;
+
 		foreach(l, aggstate->hash_needed)
 		{
 			vtype *column;
@@ -2734,6 +2737,7 @@ agg_retrieve_hash_table(VectorAggState *vaggstate)
 	TupleTableSlot *result;
 	VectorTupleSlot *vslot;
 	TupleDesc		vdesc;
+	int				row;
 	int				i;
 	vtype			*column;
 
@@ -2747,7 +2751,9 @@ agg_retrieve_hash_table(VectorAggState *vaggstate)
 	firstSlot = aggstate->ss.ss_ScanTupleSlot;
 
 	vslot = (VectorTupleSlot *)vaggstate->resultSlot;
+	VExecClearTuple((TupleTableSlot *)vslot);
 	vdesc = aggstate->ss.ps.ps_ResultTupleSlot->tts_tupleDescriptor;
+	row = 0;
 
 	/*
 	 * We loop retrieving groups until we find one satisfying
@@ -2798,17 +2804,17 @@ agg_retrieve_hash_table(VectorAggState *vaggstate)
 		for(i = 0; i < vdesc->natts; i++)
 		{
 			column = (vtype *)DatumGetPointer(vslot->tts.tts_values[i]);
-			column->values[vslot->dim] = result->tts_values[i];
-			column->dim++;
+			column->values[row] = result->tts_values[i];
 		}
-		vslot->dim++;
+		row++;
 
-		if(vslot->dim == BATCHSIZE)
+		if(row == BATCHSIZE)
 			break;
 	}
 
-	if (vslot->dim > 0)
+	if (row > 0)
 	{
+		memset(vslot->skip, false, sizeof(bool) * row);
 		ExecStoreVirtualTuple((TupleTableSlot *)vslot);
 		return (TupleTableSlot *)vslot;
 	}

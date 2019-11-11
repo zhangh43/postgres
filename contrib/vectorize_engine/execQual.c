@@ -62,7 +62,7 @@ VExecScanQual(List *qual, ExprContext *econtext, bool resultForNull)
 	TupleTableSlot	*slot;
 	VectorTupleSlot	*vslot;
 	ListCell		*l;
-	int				natts;
+	int				row;
 
 	/*
 	 * debugging stuff
@@ -91,53 +91,32 @@ VExecScanQual(List *qual, ExprContext *econtext, bool resultForNull)
 
 	slot = econtext->ecxt_scantuple;
 	vslot = (VectorTupleSlot *)slot;
-	natts = slot->tts_tupleDescriptor->natts;
 	foreach(l, qual)
 	{
 		ExprState  *clause = (ExprState *) lfirst(l);
 		Datum		expr_value;
 		bool		isNull;
 		vbool		*expr_val_bools;
-		vtype		*column;
-		int			dim, row, col;
 
 		expr_value = ExecEvalExpr(clause, econtext, &isNull, NULL);
 		
 		expr_val_bools = (vbool *)DatumGetPointer(expr_value);
 		
-		dim = 0;
-		for(row = 0; row < vslot->dim; row++)
-		{
+		for(row = 0; row < BATCHSIZE; row++)
 			if((!expr_val_bools->isnull[row] || !resultForNull) && 
-				!DatumGetBool(expr_val_bools->values[row]))
-				continue;
-			
-			/* row pass the qual */
-			if(row == dim)
-			{
-				dim++;
-				continue;
-			}
-			/* compress the tuple batch */
-			for(col = 0; col < natts; col++)
-			{
-				column = (vtype *)DatumGetPointer(slot->tts_values[col]);
-				column->values[dim] = column->values[row];
-				column->isnull[dim] = column->isnull[row];
-			}
-			dim++;
-		}
-		/* reset dim for new compressed tuplebatch */
-		for(col = 0; col < natts; col++)
-		{
-			column = (vtype *)DatumGetPointer(slot->tts_values[col]);
-			column->dim = dim;
-		}
-		vslot->dim = dim;
+				!DatumGetBool(expr_val_bools->values[row]) &&
+				!vslot->skip[row])
+				vslot->skip[row] = true;
+		/* TODO: opt: add non-skip dim for vslot to skip the whole batch?*/
 	}
 
 	MemoryContextSwitchTo(oldContext);
 
-	return (vslot->dim != 0);
+	/* return true if any tuple in batch pass the qual. */
+	for(row = 0; row < BATCHSIZE; row++)
+		if (!vslot->skip[row])
+			return true;
+
+	return false;
 }
 

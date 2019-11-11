@@ -31,9 +31,11 @@ vdate2vtimestamp(vdate* vdateVal)
 	DateADT		dateVal;
 	Timestamp	tmp;	
 	
-	result = buildvtimestamp(vdateVal->dim, NULL);
-	for (i = 0; i < vdateVal->dim; i++)
+	result = buildvtimestamp(vdateVal->dim, vdateVal->skipref);
+	for (i = 0; i < BATCHSIZE; i++)
 	{
+		if (vdateVal->skipref[i])
+			continue;
 		dateVal = DatumGetDateADT(vdateVal->values[i]);	
 #ifdef HAVE_INT64_TIMESTAMP
 		/* date is days since 2000, timestamp is microseconds since same... */
@@ -65,10 +67,12 @@ vdate_le_timestamp(PG_FUNCTION_ARGS)
 	
 	vdt1 = vdate2vtimestamp(vdateVal);
 
-	result = buildvbool(vdt1->dim, NULL);
+	result = buildvbool(vdt1->dim, vdt1->skipref);
 #ifdef HAVE_INT64_TIMESTAMP
-	for (i = 0; i < vdt1->dim; i++ )
+	for (i = 0; i < BATCHSIZE; i++ )
 	{
+		if (vdt1->skipref[i])
+			continue;
 		dt1 = DatumGetTimestamp(vdt1->values[i]);
 		result->values[i] = BoolGetDatum((dt1 <= dt2) ? true :false);
 	}
@@ -100,9 +104,11 @@ vdate_le(PG_FUNCTION_ARGS)
 	vbool		*result;
 	int			i;
 	
-	result = buildvbool(vdt1->dim, NULL);
-	for (i = 0; i < vdt1->dim; i++ )
+	result = buildvbool(vdt1->dim, vdt1->skipref);
+	for (i = 0; i < BATCHSIZE; i++ )
 	{
+		if (vdt1->skipref[i])
+			continue;
 		result->values[i] = BoolGetDatum(DatumGetDateADT(vdt1->values[i]) <= dateVal2);
 	}
 	PG_RETURN_POINTER(result);

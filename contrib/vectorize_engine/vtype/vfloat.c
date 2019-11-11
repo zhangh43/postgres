@@ -32,6 +32,7 @@ Datum vfloat8pl(PG_FUNCTION_ARGS)
 	int			i;
 	char		**entries;
 	vtype		*batch;
+	Datum *transVal;
 	int32 groupOffset = PG_GETARG_INT32(1);
 
 	if (groupOffset < 0)
@@ -39,10 +40,12 @@ Datum vfloat8pl(PG_FUNCTION_ARGS)
 
 	entries = (char **)PG_GETARG_POINTER(0);
 	batch = (vtype *) PG_GETARG_POINTER(2);
-	for (i = 0; i < batch->dim; i++)
+	for (i = 0; i < BATCHSIZE; i++)
 	{
-		Datum *transVal = (Datum *)(entries[i] + groupOffset);	
-
+		if (batch->skipref[i])
+			continue;
+		
+		transVal = (Datum *)(entries[i] + groupOffset);	
 		arg1 = DatumGetFloat8(*transVal);
 		arg2 = DatumGetFloat8(batch->values[i]);
 		result = arg1 + arg2;
@@ -77,8 +80,10 @@ vfloat8_accum(PG_FUNCTION_ARGS)
 	entries = (char **)PG_GETARG_POINTER(0);
 	batch = (vtype *) PG_GETARG_POINTER(2);
 
-	for (i = 0; i < batch->dim; i++)
+	for (i = 0; i < BATCHSIZE; i++)
 	{
+		if (batch->skipref[i])
+			continue;
 		transDatum = (Datum *)(entries[i] + groupOffset);
 		transarray = DatumGetArrayTypeP(*transDatum);
 		transvalues = check_float8_array(transarray, "float8_accum", 3);

@@ -12,6 +12,8 @@ Datum vint8inc_any(PG_FUNCTION_ARGS)
 	int			i;
 	char		**entries;
 	vtype		*batch;
+	Datum *transVal;
+	
 	int32 groupOffset = PG_GETARG_INT32(1);
 
 	if (groupOffset < 0)
@@ -19,8 +21,16 @@ Datum vint8inc_any(PG_FUNCTION_ARGS)
 		/* Not called as an aggregate, so just do it the dumb way */
 		arg = PG_GETARG_INT64(0);
 		batch = (vtype *) PG_GETARG_POINTER(2);
+		
+		result = arg;
 
-		result = arg + batch->dim;
+		for (i = 0; i < BATCHSIZE; i++)
+		{
+			if (batch->skipref[i])
+				continue;
+			result++;
+		}
+
 		/* Overflow check */
 		if (result < 0 && arg > 0)
 			ereport(ERROR,
@@ -32,9 +42,13 @@ Datum vint8inc_any(PG_FUNCTION_ARGS)
 
 	entries = (char **)PG_GETARG_POINTER(0);
 	batch = (vtype *) PG_GETARG_POINTER(2);
-	for (i = 0; i < batch->dim; i++)
+
+	for (i = 0; i < BATCHSIZE; i++)
 	{
-		Datum *transVal = (Datum *)(entries[i] + groupOffset);	
+		if (batch->skipref[i])
+			continue;
+
+		transVal = (Datum *)(entries[i] + groupOffset);	
 
 		arg = DatumGetInt64(*transVal);
 		result = arg + 1;
@@ -57,6 +71,7 @@ vint4_sum(PG_FUNCTION_ARGS)
 	vtype	*batch;
 	int		i;
 	int64	result;
+	Datum *transVal;
 	int32	groupOffset = PG_GETARG_INT32(1);
 
 #if 0
@@ -78,17 +93,25 @@ vint4_sum(PG_FUNCTION_ARGS)
 		result = PG_GETARG_INT64(0);
 		batch = (vtype *) PG_GETARG_POINTER(2);
 
-		for (i = 0; i < batch->dim; i++)
+		for (i = 0; i < BATCHSIZE; i++)
+		{
+			if (batch->skipref[i])
+				continue;
+
 			result += DatumGetInt32(batch->values[i]);
+		}
 
 		PG_RETURN_INT64(result);
 	}
 
 	entries = (char **)PG_GETARG_POINTER(0);
 	batch = (vtype *) PG_GETARG_POINTER(2);
-	for (i = 0; i < batch->dim; i++)
+	for (i = 0; i < BATCHSIZE; i++)
 	{
-		Datum *transVal = (Datum *)(entries[i] + groupOffset);	
+		if (batch->skipref[i])
+			continue;
+
+		transVal = (Datum *)(entries[i] + groupOffset);	
 
 		result = DatumGetInt64(*transVal);
 		result += DatumGetInt32(batch->values[i]);
@@ -106,15 +129,21 @@ Datum vint8inc(PG_FUNCTION_ARGS)
 	int			i;
 	char		**entries;
 	vtype		*batch;
+	Datum *transVal;
 	int32 groupOffset = PG_GETARG_INT32(1);
 
 	if (groupOffset < 0)
 	{
 		/* Not called as an aggregate, so just do it the dumb way */
-		arg = PG_GETARG_INT64(0);
+		result = arg = PG_GETARG_INT64(0);
 		batch = (vtype *) PG_GETARG_POINTER(2);
 
-		result = arg + batch->dim;
+		for (i = 0; i < BATCHSIZE; i++)
+		{
+			if (batch->skipref[i])
+				continue;
+			result++;
+		}
 		/* Overflow check */
 		if (result < 0 && arg > 0)
 			ereport(ERROR,
@@ -126,10 +155,12 @@ Datum vint8inc(PG_FUNCTION_ARGS)
 
 	entries = (char **)PG_GETARG_POINTER(0);
 	batch = (vtype *) PG_GETARG_POINTER(2);
-	for (i = 0; i < batch->dim; i++)
+	for (i = 0; i < BATCHSIZE; i++)
 	{
-		Datum *transVal = (Datum *)(entries[i] + groupOffset);	
+		if (batch->skipref[i])
+			continue;
 
+		transVal = (Datum *)(entries[i] + groupOffset);	
 		arg = DatumGetInt64(*transVal);
 		result = arg + 1;
 		/* Overflow check */

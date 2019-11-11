@@ -130,6 +130,7 @@ VMakeTupleTableSlot(void)
 	vslot = (VectorTupleSlot*)slot;
 	vslot->dim = 0;
 	memset(vslot->tts_buffers, InvalidBuffer, sizeof(vslot->tts_buffers));
+	memset(vslot->skip, true, sizeof(vslot->skip));
 
 	return slot;
 }
@@ -234,6 +235,9 @@ VExecClearTuple(TupleTableSlot *slot)	/* slot in which to store tuple */
 		column = (vtype *)DatumGetPointer(slot->tts_values[i]);
 		column->dim = 0;
 	}
+
+	memset(vslot->skip, true, sizeof(vslot->skip));
+
 	return slot;
 }
 
@@ -293,8 +297,11 @@ VExecAssignResultType(PlanState *planstate, TupleDesc tupDesc)
 {
 	TupleDesc	vdesc;
 	int			i;
-
-	TupleTableSlot *slot = planstate->ps_ResultTupleSlot;
+	TupleTableSlot *slot;
+	VectorTupleSlot *vslot;
+	
+	slot = planstate->ps_ResultTupleSlot;
+	vslot = (VectorTupleSlot *)slot;
 
 	/* since we need to change the vtype in TupleDesc in relcache, we need to copy it. */
 	vdesc = CreateTupleDescCopyConstr(tupDesc);
@@ -316,7 +323,7 @@ VExecAssignResultType(PlanState *planstate, TupleDesc tupDesc)
 		vtype		*column;
 
 		typid = slot->tts_tupleDescriptor->attrs[i]->atttypid;
-		column = buildvtype(typid, BATCHSIZE, NULL);
+		column = buildvtype(typid, BATCHSIZE, vslot->skip);
 		column->dim = 0;
 		slot->tts_values[i]  = PointerGetDatum(column);
 		/* tts_isnull not used yet */

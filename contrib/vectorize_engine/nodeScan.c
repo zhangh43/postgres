@@ -412,6 +412,7 @@ VectorScanAccess(CustomScanState *css)
 	memset(buffers, InvalidBuffer, sizeof(Buffer) * BATCHSIZE);
 	nbuffers = 0;
 	curBuffer = InvalidBuffer;
+	vslot = (VectorTupleSlot *)slot;
 
 	for (row = 0 ; row < BATCHSIZE; row++)
 	{
@@ -442,15 +443,13 @@ VectorScanAccess(CustomScanState *css)
 			column = (vtype *)DatumGetPointer(slot->tts_values[col]);
 			column->values[row] = values[col];
 			column->isnull[row] = isnull[col];
-			column->dim++;
 		}
 	}
 
-	vslot = (VectorTupleSlot *)slot;
-	vslot->dim = row;
 	/* form tuple with tuple batch */
 	if (row > 0)
 	{
+		memset(vslot->skip, false, sizeof(bool) * row);
 		/*
 		 * And return the virtual tuple.
 		 */
@@ -478,6 +477,7 @@ InitScanRelation(ScanState *node, EState *estate, int eflags)
 	Relation	currentRelation;
 	TupleDesc	vdesc;
 	TupleTableSlot *slot;
+	VectorTupleSlot *vslot;
 	int 		i;
 
 	/*
@@ -505,6 +505,7 @@ InitScanRelation(ScanState *node, EState *estate, int eflags)
 	ExecAssignScanType(node, vdesc);
 
 	slot = ((ScanState *)node)->ss_ScanTupleSlot;
+	vslot = (VectorTupleSlot *)slot;
 	/* initailize tuple batch */
 	for (i = 0; i < vdesc->natts; i++)
 	{
@@ -512,8 +513,7 @@ InitScanRelation(ScanState *node, EState *estate, int eflags)
 		vtype		*column;
 
 		typid = slot->tts_tupleDescriptor->attrs[i]->atttypid;
-		column = buildvtype(typid, BATCHSIZE, NULL);
-		column->dim = 0;
+		column = buildvtype(typid, BATCHSIZE, vslot->skip);
 		slot->tts_values[i]  = PointerGetDatum(column);
 		/* tts_isnull not used yet */
 		slot->tts_isnull[i] = false;
