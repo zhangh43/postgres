@@ -1,12 +1,9 @@
 /*-------------------------------------------------------------------------
  *
- * gpvector.c
- *	  TODO file description
- *
+ * VectorEngine.c
+ *	  Portal of vertorized engine for Postgres.
  *
  * Copyright (c) 2019-Present Pivotal Software, Inc.
- *
- *
  *-------------------------------------------------------------------------
  */
 
@@ -15,15 +12,25 @@
 #include "fmgr.h"
 #include "optimizer/planner.h"
 #include "executor/nodeCustom.h"
+#include "utils/guc.h"
 
-#include "vectorEngine.h"
 #include "nodeUnbatch.h"
-#include "nodeScan.h"
+#include "nodeSeqscan.h"
+#include "nodeAgg.h"
 #include "plan.h"
 
 PG_MODULE_MAGIC;
 
+/* static variables */
+static bool					enable_vectorize_engine;
+static bool					enable_vectorize_notice;
 static planner_hook_type    planner_hook_next;
+
+/* static functionss */
+static PlannedStmt *vector_post_planner(Query *parse, int cursorOptions,
+									ParamListInfo boundParams);
+
+void	_PG_init(void);
 
 static PlannedStmt *
 vector_post_planner(Query	*parse,
@@ -39,6 +46,10 @@ vector_post_planner(Query	*parse,
 	else
 		stmt = standard_planner(parse, cursorOptions, boundParams);
 
+	if (!enable_vectorize_engine)
+		return stmt;
+
+	/* modify plan by using vectorized nodes */
 	savedPlanTree = stmt->planTree;
 	savedSubplan = stmt->subplans;
 
@@ -56,6 +67,10 @@ vector_post_planner(Query	*parse,
 		}
 		stmt->subplans = subplans;
 
+		/* 
+		 * vectorize executor exchange batch of tuples between plan nodes
+		 * add unbatch node at top to convert batch to row and send to client.
+		 */
 		stmt->planTree = AddUnbatchNodeAtTop(stmt->planTree);
 	}
 	PG_CATCH();
@@ -63,10 +78,11 @@ vector_post_planner(Query	*parse,
 		ErrorData  *edata;
 		edata = CopyErrorData();
 		FlushErrorState();
-		ereport(NOTICE,
-				(errcode(ERRCODE_INTERNAL_ERROR),
-				 errmsg("query can't be vectorized"),
-				 errdetail("%s", edata->message)));
+		if (enable_vectorize_notice)
+			ereport(NOTICE,
+					(errcode(ERRCODE_INTERNAL_ERROR),
+					 errmsg("query can't be vectorized"),
+					 errdetail("%s", edata->message)));
 		stmt->planTree = savedPlanTree;
 		stmt->subplans = savedSubplan;
 	}
@@ -78,10 +94,32 @@ vector_post_planner(Query	*parse,
 void
 _PG_init(void)
 {
+	elog(LOG, "Initialize vectorized extension");
+
+	/* Register customscan node for vectorized scan and agg */
 	InitVectorScan();
+	InitVectorAgg();
 	InitUnbatch();
 
     /* planner hook registration */
     planner_hook_next = planner_hook;
     planner_hook = vector_post_planner;
+
+	DefineCustomBoolVariable("enable_vectorize_engine",
+							 "Enables vectorize engine.",
+							 NULL,
+							 &enable_vectorize_engine,
+							 false,
+							 PGC_USERSET,
+							 GUC_NOT_IN_SAMPLE,
+							 NULL, NULL, NULL);
+
+	DefineCustomBoolVariable("enable_vectorize_notice",
+							 "Enables vectorize engine.",
+							 NULL,
+							 &enable_vectorize_notice,
+							 true,
+							 PGC_USERSET,
+							 GUC_NOT_IN_SAMPLE,
+							 NULL, NULL, NULL);
 }

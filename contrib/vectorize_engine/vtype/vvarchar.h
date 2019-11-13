@@ -6,7 +6,7 @@ typedef struct vtype vvarchar;
 extern vvarchar *buildvvarchar(int dim, bool *skip);
 
 
-extern Datum vvarchar_in(PG_FUNCTION_ARGS);
-extern Datum vvarchar_out(PG_FUNCTION_ARGS);
+extern Datum vvarcharin(PG_FUNCTION_ARGS);
+extern Datum vvarcharout(PG_FUNCTION_ARGS);
 
 #endif

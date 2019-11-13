@@ -1,5 +1,7 @@
 #include "postgres.h"
+
 #include "catalog/namespace.h"
+#include "executor/executor.h"
 #include "utils/lsyscache.h"
 #include "utils/syscache.h"
 #include "utils/hsearch.h"
@@ -16,8 +18,34 @@ static HTAB *hashMapN2V = NULL;
 static HTAB *hashMapV2N = NULL;
 
 #define BUILTIN_TYPE_NUM 12
-const char *typenames[] = { "any", "int2", "int4", "int8", "float4", "float8", "bool", "text", "date", "bpchar", "timestamp", "varchar"};
-const char *vtypenames[] = { "vany", "vint2", "vint4", "vint8", "vfloat4", "vfloat8", "vbool", "vtext", "vdate", "vbpchar", "vtimestamp","vvarchar"};
+#define TYPE_HASH_TABLE_SIZE 64
+const char *typenames[] = { "any", "int2", "int4", "int8", "float4", "float8",
+							"bool", "text", "date", "bpchar", "timestamp", "varchar"};
+const char *vtypenames[] = { "vany", "vint2", "vint4", "vint8", "vfloat4",
+							"vfloat8", "vbool", "vtext", "vdate", "vbpchar",
+							"vtimestamp","vvarchar"};
+
+
+/*
+ * Clear common CustomScanState, since we would
+ * use custom scan to do agg, hash etc.
+ */
+void
+ClearCustomScanState(CustomScanState *node)
+{
+	/* Free the exprcontext */
+	ExecFreeExprContext(&node->ss.ps);
+
+	/* Clean out the tuple table */
+	ExecClearTuple(node->ss.ps.ps_ResultTupleSlot);
+	ExecClearTuple(node->ss.ss_ScanTupleSlot);
+
+	/* Close the heap relation */
+	if (node->ss.ss_currentRelation)
+		ExecCloseScanRelation(node->ss.ss_currentRelation);
+}
+
+
 /*
  * map non-vectorized type to vectorized type.
  * To scan the PG_TYPE is inefficient, so we create a hashtable to map
@@ -39,7 +67,7 @@ Oid GetVtype(Oid ntype)
 		hash_ctl.entrysize = sizeof(VecTypeHashEntry);
 		hash_ctl.hash = oid_hash;
 
-		hashMapN2V = hash_create("vectorized_n2v", 64/*enough?*/,
+		hashMapN2V = hash_create("vectorized_n2v",TYPE_HASH_TABLE_SIZE,
 								&hash_ctl, HASH_ELEM | HASH_FUNCTION);
 	}
 
@@ -92,7 +120,7 @@ Oid GetNtype(Oid vtype)
 		hash_ctl.entrysize = sizeof(VecTypeHashEntry);
 		hash_ctl.hash = oid_hash;
 
-		hashMapV2N = hash_create("vectorized_v2n", 64/*enough?*/,
+		hashMapV2N = hash_create("vectorized_v2n", TYPE_HASH_TABLE_SIZE,
 								&hash_ctl, HASH_ELEM | HASH_FUNCTION);
 	}
 
@@ -108,7 +136,6 @@ Oid GetNtype(Oid vtype)
 
 			if (vtypid == InvalidOid)
 				return InvalidOid;
-			/* insert int4->vint4 mapping manually, may construct from catalog in future */
 			entry = hash_search(hashMapV2N, &vtypid, HASH_ENTER, &found);
 			entry->dest = typid;
 		}

@@ -16,11 +16,11 @@
 #include "optimizer/planner.h"
 #include "executor/nodeCustom.h"
 
-#include "vectorEngine.h"
 #include "nodeUnbatch.h"
 #include "execTuples.h"
-#include "vtype.h"
+#include "vtype/vtype.h"
 #include "utils.h"
+#include "vectorTupleSlot.h"
 
 
 /*
@@ -68,23 +68,24 @@ BeginUnbatch(CustomScanState *node, EState *estate, int eflags)
 {
 	UnbatchState *vcs = (UnbatchState*) node;
 	CustomScan     *cscan = (CustomScan *) node->ss.ps.plan;
+	TupleDesc   tupdesc;
 
 	outerPlanState(vcs) = ExecInitNode(outerPlan(cscan), estate, eflags);
 
 	/* Convert Vtype in tupdesc to Ntype in unbatch Node */
-    {
+	{
 		node->ss.ps.ps_ResultTupleSlot->tts_tupleDescriptor = CreateTupleDescCopy(outerPlanState(vcs)->ps_ResultTupleSlot->tts_tupleDescriptor);
-        TupleDesc   tupdesc = node->ss.ps.ps_ResultTupleSlot->tts_tupleDescriptor;
+		tupdesc = node->ss.ps.ps_ResultTupleSlot->tts_tupleDescriptor;
 
-        for (int i = 0; i < tupdesc->natts; i++)
-        {
-            Form_pg_attribute attr = tupdesc->attrs[i];
-            Oid         typid = GetNtype(attr->atttypid);
-            if (typid != InvalidOid)
-                attr->atttypid = typid;
-        }
+		for (int i = 0; i < tupdesc->natts; i++)
+		{
+			Form_pg_attribute attr = tupdesc->attrs[i];
+			Oid         typid = GetNtype(attr->atttypid);
+			if (typid != InvalidOid)
+				attr->atttypid = typid;
+		}
 		ExecSetSlotDescriptor(node->ss.ps.ps_ResultTupleSlot, tupdesc);
-    }
+	}
 
 	vcs->ps_ResultVTupleSlot = VExecInitExtraTupleSlot(estate);
 	vcs->ps_ResultVTupleSlot->tts_tupleDescriptor = CreateTupleDescCopy(outerPlanState(vcs)->ps_ResultTupleSlot->tts_tupleDescriptor);

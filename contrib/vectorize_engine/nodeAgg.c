@@ -490,6 +490,7 @@ static TupleTableSlot *project_aggregates(AggState *aggstate);
 static Bitmapset *find_unaggregated_cols(AggState *aggstate);
 static bool find_unaggregated_cols_walker(Node *node, Bitmapset **colnos);
 static void build_hash_table(AggState *aggstate);
+/* lookup_hash_entry now return a batch of hash entries. */
 static AggHashEntry *lookup_hash_entry(AggState *aggstate,
 				  TupleTableSlot *inputslot);
 static TupleTableSlot *agg_retrieve_direct(AggState *aggstate);
@@ -510,12 +511,13 @@ static int find_compatible_pertrans(AggState *aggstate, Aggref *newagg,
 						 List *transnos);
 
 
-/*------------------------------------------------------------*/
+/*-------------------------- Vectorize part of nodeAgg ---------------------------------*/
 
 #include "nodeAgg.h"
 #include "execTuples.h"
 #include "utils.h"
 #include "nodes/extensible.h"
+#include "vectorTupleSlot.h"
 
 /*
  * VectorAggState - state object of vectoragg on executor.
@@ -527,7 +529,6 @@ typedef struct VectorAggState
 	TupleTableSlot	*resultSlot;
 } VectorAggState;
 
-static void ClearCustomScanState(CustomScanState *node);
 static AggState *VExecInitAgg(Agg *node, EState *estate, int eflags);
 static TupleTableSlot *VExecAgg(VectorAggState *node);
 static void VExecEndAgg(AggState *node);
@@ -567,7 +568,7 @@ static CustomExecMethods	vectoragg_exec_methods = {
 
 
 /*
- * CreateVectorScanState - A method of CustomScan; that populate a custom
+ * CreateVectorAggState - A method of CustomScan; that populate a custom
  * object being delivered from CustomScanState type, according to the
  * supplied CustomPath object.
  *
@@ -641,21 +642,6 @@ EndVectorAgg(CustomScanState *css)
 	VectorAggState *vaggstate;
 	vaggstate = (VectorAggState*)css;
 	VExecEndAgg(vaggstate->aggstate);
-}
-
-static void
-ClearCustomScanState(CustomScanState *node)
-{
-	/* Free the exprcontext */
-	ExecFreeExprContext(&node->ss.ps);
-
-	/* Clean out the tuple table */
-	ExecClearTuple(node->ss.ps.ps_ResultTupleSlot);
-	ExecClearTuple(node->ss.ss_ScanTupleSlot);
-
-	/* Close the heap relation */
-	if (node->ss.ss_currentRelation)
-		ExecCloseScanRelation(node->ss.ss_currentRelation);
 }
 
 static void
@@ -818,6 +804,9 @@ MakeCustomScanForAgg(void)
 	return cscan;
 }
 
+/*
+ * Initialize vectoragg CustomScan node.
+ */
 void
 InitVectorAgg(void)
 {
@@ -825,7 +814,7 @@ InitVectorAgg(void)
 	RegisterCustomScanMethods(&vectoragg_scan_methods);
 }
 
-/*------------------------------------------------------------*/
+/*---------------------- End of vectorized part of nodeAgg ---------------------------*/
 
 
 
@@ -1173,6 +1162,7 @@ advance_transition_function(AggState *aggstate,
  *
  * When called, CurrentMemoryContext should be the per-query context.
  */
+//TODO put ahead
 static void
 advance_aggregates_vectorize(AggState *aggstate, AggHashEntry *entries)
 {
@@ -1347,6 +1337,10 @@ advance_aggregates(AggState *aggstate, AggStatePerGroup pergroup)
 			/* Load values into fcinfo */
 			/* Start from 1, since the 0th arg will be the transition value */
 			Assert(slot->tts_nvalid >= numTransInputs);
+			/* 
+			 * vectorize specific function arg used to indicate
+			 * groupoffset. Using -1 to indicate it's plain agg.
+			 */
 			fcinfo->arg[1] = Int32GetDatum(-1);
 			fcinfo->argnull[1] = false;
 			for (i = 0; i < numTransInputs; i++)
@@ -2248,8 +2242,10 @@ lookup_hash_entry(AggState *aggstate, TupleTableSlot *inputslot)
 	entries = palloc(sizeof(AggHashEntry) * BATCHSIZE);
 	
 	/* transfer just the needed columns into hashslot */
-	slot_getsomeattrs(inputslot, linitial_int(aggstate->hash_needed));
+	Vslot_getsomeattrs(inputslot, linitial_int(aggstate->hash_needed));
 
+	/* probe and find hash entries for every tuples in vector slot. */
+	/* TODO: separate cal hashvalue and probe hash table */
 	for (i = 0; i < BATCHSIZE; i++)
 	{
 		if (vslot->skip[i])
@@ -2653,6 +2649,7 @@ agg_retrieve_direct(AggState *aggstate)
 
 		finalize_aggregates(aggstate, peragg, pergroup, currentSet);
 
+		//TODO:
 		convert_agg_value_to_batch(aggstate, peragg);
 
 		/*
@@ -2710,6 +2707,7 @@ agg_fill_hash_table(AggState *aggstate)
 			elog(ERROR, "vectorize agg combine not supported.");
 			//combine_aggregates(aggstate, entry->pergroup);
 		}
+		/* TODO */
 		else
 			advance_aggregates_vectorize(aggstate, entries);
 

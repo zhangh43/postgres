@@ -1,57 +1,27 @@
 SET search_path = public;
 
-/*
 --drop agg functions
 --drop the previous funcitons
-DROP AGGREGATE IF EXISTS sum(vint2);
 DROP AGGREGATE IF EXISTS sum(vint4);
-DROP AGGREGATE IF EXISTS sum(vint8);
-DROP AGGREGATE IF EXISTS sum(vfloat4);
 DROP AGGREGATE IF EXISTS sum(vfloat8);
 
-DROP AGGREGATE IF EXISTS avg(vint2);
-DROP AGGREGATE IF EXISTS avg(vint4);
-DROP AGGREGATE IF EXISTS avg(vint8);
-DROP AGGREGATE IF EXISTS avg(vfloat4);
 DROP AGGREGATE IF EXISTS avg(vfloat8);
 
-DROP AGGREGATE IF EXISTS count(vint2);
-DROP AGGREGATE IF EXISTS count(vint4);
-DROP AGGREGATE IF EXISTS count(vint8);
-DROP AGGREGATE IF EXISTS count(vfloat4);
-DROP AGGREGATE IF EXISTS count(vfloat8);
+DROP AGGREGATE IF EXISTS count(vany);
 
-DROP AGGREGATE IF EXISTS veccount(*);
+-- DROP TYPEs first
+DROP TYPE IF EXISTS vint2 cascade;
+DROP TYPE IF EXISTS vint4 cascade;
+DROP TYPE IF EXISTS vint8 cascade;
+DROP TYPE IF EXISTS vfloat8 cascade;
+DROP TYPE IF EXISTS vfloat4 cascade;
+DROP TYPE IF EXISTS vbool cascade;
+DROP TYPE IF EXISTS vtext cascade;
+DROP TYPE IF EXISTS vdate cascade;
+DROP TYPE IF EXISTS vtimestamp cascade;
+DROP TYPE IF EXISTS vbpchar cascade;
+DROP TYPE IF EXISTS vvarchar cascade;
 
-DROP FUNCTION IF EXISTS int8vint2pl(int8, vint2);
-DROP FUNCTION IF EXISTS int8vint4pl(int8, vint4);
-DROP FUNCTION IF EXISTS vint8_accum(numeric, vint8);
-DROP FUNCTION IF EXISTS vfloat4_accum(float4, vfloat4);
-DROP FUNCTION IF EXISTS vfloat8_accum(float8, vfloat8);
-
-DROP FUNCTION IF EXISTS vint2_avg_accum(bytea, vint2);
-DROP FUNCTION IF EXISTS vint4_avg_accum(bytea, vint4);
-DROP FUNCTION IF EXISTS vint8_avg_accum(bytea, vint8);
-DROP FUNCTION IF EXISTS vfloat4_avg_accum(bytea, vfloat4);
-DROP FUNCTION IF EXISTS vfloat8_avg_accum(bytea, vfloat8);
-
-DROP FUNCTION IF EXISTS vint2_inc(int8, vint2);
-DROP FUNCTION IF EXISTS vint4_inc(int8, vint4);
-DROP FUNCTION IF EXISTS vint8_inc(int8, vint8);
-DROP FUNCTION IF EXISTS vfloat4_inc(int8, vfloat4);
-DROP FUNCTION IF EXISTS vfloat8_inc(int8, vfloat8);
-
-DROP FUNCTION IF EXISTS vec_inc_any(int8);
-
--- drop types first
-drop type vint2 cascade;
-drop type vint4 cascade;
-drop type vint8 cascade;
-drop type vfloat8 cascade;
-drop type vfloat4 cascade;
-drop type vbool cascade;
-drop type vdateadt cascade;
-*/
 
 
 
@@ -772,8 +742,8 @@ CREATE FUNCTION vfloat8vfloat8pl(vfloat8, vfloat8) RETURNS vfloat8 AS '$libdir/v
 CREATE OPERATOR + ( leftarg = vfloat8, rightarg = vfloat8, procedure = vfloat8vfloat8pl, commutator = - );
 CREATE FUNCTION vfloat8vfloat8mi(vfloat8, vfloat8) RETURNS vfloat8 AS '$libdir/vectorize_engine' LANGUAGE C IMMUTABLE STRICT;
 CREATE OPERATOR - ( leftarg = vfloat8, rightarg = vfloat8, procedure = vfloat8vfloat8mi, commutator = + );
-CREATE FUNCTION vfloat8vfloat8mul(vfloat8, vfloat8) RETURNS vfloat8 AS '$libdir/vectorize_engine' LANGUAGE C IMMUTABLE STRICT;
-CREATE OPERATOR * ( leftarg = vfloat8, rightarg = vfloat8, procedure = vfloat8vfloat8mul, commutator = / );
+CREATE FUNCTION vfloat8vfloat8mul2(vfloat8, vfloat8) RETURNS vfloat8 AS '$libdir/vectorize_engine' LANGUAGE C IMMUTABLE STRICT;
+CREATE OPERATOR * ( leftarg = vfloat8, rightarg = vfloat8, procedure = vfloat8vfloat8mul2, commutator = / );
 CREATE FUNCTION vfloat8vfloat8div(vfloat8, vfloat8) RETURNS vfloat8 AS '$libdir/vectorize_engine' LANGUAGE C IMMUTABLE STRICT;
 CREATE OPERATOR / ( leftarg = vfloat8, rightarg = vfloat8, procedure = vfloat8vfloat8div, commutator = * );
 
@@ -1044,146 +1014,8 @@ CREATE OPERATOR - ( leftarg = vdate, rightarg = interval, procedure = vdate_mi_i
 CREATE FUNCTION vdate_le(vdate, date) RETURNS vdate AS '$libdir/vectorize_engine' LANGUAGE C IMMUTABLE STRICT;
 CREATE OPERATOR <= ( leftarg = vdate, rightarg = date, procedure = vdate_le, commutator = <= );
 
-/*
-CREATE FUNCTION vdateadt_eq(vdateadt, vdateadt) RETURNS vbool AS '$libdir/vectorize_engine' LANGUAGE C IMMUTABLE STRICT;
-CREATE OPERATOR = ( leftarg = vdateadt, rightarg = vdateadt, procedure = vdateadt_eq, commutator = = );
-CREATE FUNCTION vdateadt_ne(vdateadt, vdateadt) RETURNS vbool AS '$libdir/vectorize_engine' LANGUAGE C IMMUTABLE STRICT;
-CREATE OPERATOR <> ( leftarg = vdateadt, rightarg = vdateadt, procedure = vdateadt_ne, commutator = <> );
-CREATE FUNCTION vdateadt_lt(vdateadt, vdateadt) RETURNS vbool AS '$libdir/vectorize_engine' LANGUAGE C IMMUTABLE STRICT;
-CREATE OPERATOR < ( leftarg = vdateadt, rightarg = vdateadt, procedure = vdateadt_lt, commutator = < );
-CREATE FUNCTION vdateadt_le(vdateadt, vdateadt) RETURNS vbool AS '$libdir/vectorize_engine' LANGUAGE C IMMUTABLE STRICT;
-CREATE OPERATOR <= ( leftarg = vdateadt, rightarg = vdateadt, procedure = vdateadt_le, commutator = <= );
-CREATE FUNCTION vdateadt_gt(vdateadt, vdateadt) RETURNS vbool AS '$libdir/vectorize_engine' LANGUAGE C IMMUTABLE STRICT;
-CREATE OPERATOR > ( leftarg = vdateadt, rightarg = vdateadt, procedure = vdateadt_gt, commutator = > );
-CREATE FUNCTION vdateadt_ge(vdateadt, vdateadt) RETURNS vbool AS '$libdir/vectorize_engine' LANGUAGE C IMMUTABLE STRICT;
-CREATE OPERATOR >= ( leftarg = vdateadt, rightarg = vdateadt, procedure = vdateadt_ge, commutator = >= );
-CREATE FUNCTION vdateadt_mi(vdateadt, vdateadt) RETURNS vint4 AS '$libdir/vectorize_engine' LANGUAGE C IMMUTABLE STRICT;
-CREATE OPERATOR - ( leftarg = vdateadt, rightarg = vdateadt, procedure = vdateadt_mi, commutator = - );
-CREATE FUNCTION vdateadt_pli(vdateadt, vint4) RETURNS vdateadt AS '$libdir/vectorize_engine' LANGUAGE C IMMUTABLE STRICT;
-CREATE OPERATOR + ( leftarg = vdateadt, rightarg = vint4, procedure = vdateadt_pli, commutator = + );
-CREATE FUNCTION vdateadt_mii(vdateadt, vint4) RETURNS vdateadt AS '$libdir/vectorize_engine' LANGUAGE C IMMUTABLE STRICT;
-CREATE OPERATOR - ( leftarg = vdateadt, rightarg = vint4, procedure = vdateadt_mii, commutator = - );
-*/
-
-
-/*
-CREATE FUNCTION vdateadt_eq_dateadt(vdateadt, date) RETURNS vbool AS '$libdir/vectorize_engine' LANGUAGE C IMMUTABLE STRICT;
-CREATE OPERATOR = ( leftarg = vdateadt, rightarg = date, procedure = vdateadt_eq_dateadt, commutator = = );
-CREATE FUNCTION vdateadt_ne_dateadt(vdateadt, date) RETURNS vbool AS '$libdir/vectorize_engine' LANGUAGE C IMMUTABLE STRICT;
-CREATE OPERATOR <> ( leftarg = vdateadt, rightarg = date, procedure = vdateadt_ne_dateadt, commutator = <> );
-CREATE FUNCTION vdateadt_lt_dateadt(vdateadt, date ) RETURNS vbool AS '$libdir/vectorize_engine' LANGUAGE C IMMUTABLE STRICT;
-CREATE OPERATOR < ( leftarg = vdateadt, rightarg = date, procedure = vdateadt_lt_dateadt, commutator = < );
-CREATE FUNCTION vdateadt_le_dateadt(vdateadt, date) RETURNS vbool AS '$libdir/vectorize_engine' LANGUAGE C IMMUTABLE STRICT;
-CREATE OPERATOR <= ( leftarg = vdateadt, rightarg = date, procedure = vdateadt_le_dateadt, commutator = <= );
-CREATE FUNCTION vdateadt_gt_dateadt(vdateadt, date) RETURNS vbool AS '$libdir/vectorize_engine' LANGUAGE C IMMUTABLE STRICT;
-CREATE OPERATOR > ( leftarg = vdateadt, rightarg = date, procedure = vdateadt_gt_dateadt, commutator = > );
-CREATE FUNCTION vdateadt_ge_dateadt(vdateadt, date) RETURNS vbool AS '$libdir/vectorize_engine' LANGUAGE C IMMUTABLE STRICT;
-CREATE OPERATOR >= ( leftarg = vdateadt, rightarg = date, procedure = vdateadt_ge_dateadt, commutator = >= );
-CREATE FUNCTION vdateadt_mi_dateadt(vdateadt, date) RETURNS vint4 AS '$libdir/vectorize_engine' LANGUAGE C IMMUTABLE STRICT;
-CREATE OPERATOR - ( leftarg = vdateadt, rightarg = date, procedure = vdateadt_mi_dateadt, commutator = - );
-CREATE FUNCTION vdateadt_pli_int4(vdateadt, int4) RETURNS vdateadt AS '$libdir/vectorize_engine' LANGUAGE C IMMUTABLE STRICT;
-CREATE OPERATOR + ( leftarg = vdateadt, rightarg = int4, procedure = vdateadt_pli_int4, commutator = + );
-CREATE FUNCTION vdateadt_mii_int4(vdateadt, int4) RETURNS vdateadt AS '$libdir/vectorize_engine' LANGUAGE C IMMUTABLE STRICT;
-CREATE OPERATOR - ( leftarg = vdateadt, rightarg = int4, procedure = vdateadt_mii_int4, commutator = - );
-*/
-
-
---create sum aggregate functions
-
-/*
-CREATE FUNCTION int8vint2pl(int8, vint2) returns int8 as '$libdir/vectorize_engine' language c immutable;
-CREATE AGGREGATE sum(vint2) ( 
-    sfunc = int8vint2pl, 
-    stype = int8);
-
-CREATE FUNCTION int8vint4pl(int8, vint4) returns int8 as '$libdir/vectorize_engine' language c immutable;
-CREATE AGGREGATE sum(vint4) ( 
-    sfunc = int8vint4pl, 
-    stype = int8);
-    
-CREATE FUNCTION vint8_accum(numeric, vint8) returns numeric as '$libdir/vectorize_engine' language c immutable;
-CREATE AGGREGATE sum(vint8) ( 
-    sfunc = vint8_accum, 
-    stype = numeric);
-    
-CREATE FUNCTION vfloat4_accum(float4, vfloat4) returns float4 as '$libdir/vectorize_engine' language c immutable;
-CREATE AGGREGATE sum(vfloat4) ( 
-    sfunc = vfloat4_accum, 
-    stype = float4);
-    
-CREATE FUNCTION vfloat8_accum(float8, vfloat8) returns float8 as '$libdir/vectorize_engine' language c immutable;
-CREATE AGGREGATE sum(vfloat8) ( 
-    sfunc = vfloat8_accum, 
-    stype = float8);
-*/
-
-
-
---create avg aggregate functions
-
-/*
-CREATE FUNCTION vint2_avg_accum(bytea, vint2) returns bytea as '$libdir/vectorize_engine' language c immutable;
-CREATE AGGREGATE avg(vint2) ( 
-    sfunc = vint2_avg_accum,
-    stype = bytea);
-    
-CREATE FUNCTION vint4_avg_accum(bytea, vint4) returns bytea as '$libdir/vectorize_engine' language c immutable;
-CREATE AGGREGATE avg(vint4) ( 
-    sfunc = vint4_avg_accum,
-    stype = bytea);
-
-CREATE FUNCTION vint8_avg_accum(bytea, vint8) returns bytea as '$libdir/vectorize_engine' language c immutable;
-CREATE AGGREGATE avg(vint8) ( 
-    sfunc = vint8_avg_accum,
-    stype = bytea);
-
-CREATE FUNCTION vfloat4_avg_accum(bytea, vfloat4) returns bytea as '$libdir/vectorize_engine' language c immutable;
-CREATE AGGREGATE avg(vfloat4) ( 
-    sfunc = vfloat4_avg_accum,
-    stype = bytea);
-
-CREATE FUNCTION vfloat8_avg_accum(bytea, vfloat8) returns bytea as '$libdir/vectorize_engine' language c immutable;
-CREATE AGGREGATE avg(vfloat8) ( 
-    sfunc = vfloat8_avg_accum,
-    stype = bytea);
-*/
-
 
 --create count aggregate functions
-
-/*
-CREATE FUNCTION vint2_inc(int8, vint2) returns int8 as '$libdir/vectorize_engine' language c immutable;
-create AGGREGATE count(vint2) ( 
-    sfunc = vint2_inc, 
-    stype = int8);
-
-CREATE FUNCTION vint4_inc(int8, vint4) returns int8 as '$libdir/vectorize_engine' language c immutable;
-create AGGREGATE count(vint4) ( 
-    sfunc = vint4_inc, 
-    stype = int8);
-
-CREATE FUNCTION vint8_inc(int8, vint8) returns int8 as '$libdir/vectorize_engine' language c immutable;
-create AGGREGATE count(vint8) ( 
-    sfunc = vint8_inc, 
-    stype = int8);
-    
-CREATE FUNCTION vfloat4_inc(int8, vfloat4) returns int8 as '$libdir/vectorize_engine' language c immutable;
-create AGGREGATE count(vfloat4) ( 
-    sfunc = vfloat4_inc, 
-    stype = int8);
-    
-CREATE FUNCTION vfloat8_inc(int8, vfloat8) returns int8 as '$libdir/vectorize_engine' language c immutable;
-create AGGREGATE count(vfloat8) ( 
-    sfunc = vfloat8_inc, 
-    stype = int8);
-
---change the name to veccount, urgly...we will use this function to replace this count(*) functions in vcheck.c
-CREATE FUNCTION vec_inc_any(int8) returns int8 as '$libdir/vectorize_engine' language c immutable;
-create AGGREGATE veccount(*) ( 
-    sfunc = vec_inc_any, 
-    stype = int8);
-*/
-
 
 CREATE FUNCTION vint8inc_any(int8, vany) returns int8 as '$libdir/vectorize_engine' language c immutable;
 create AGGREGATE count(vany) ( 
@@ -1193,11 +1025,6 @@ create AGGREGATE count(vany) (
 CREATE FUNCTION vint4_sum(int8, vint4) returns int8 as '$libdir/vectorize_engine' language c immutable;
 CREATE AGGREGATE sum(vint4) ( 
     sfunc = vint4_sum, 
-    stype = int8);
-
-CREATE FUNCTION vint8inc(int8) returns int8 as '$libdir/vectorize_engine' language c immutable strict;
-create AGGREGATE count(*) ( 
-    sfunc = vint8inc, 
     stype = int8);
 
 CREATE FUNCTION vfloat8pl(float8, vfloat8) returns float8 as '$libdir/vectorize_engine' language c immutable;

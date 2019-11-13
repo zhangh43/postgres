@@ -4,6 +4,7 @@
 #include "utils/array.h"
 #include "catalog/pg_type.h"
 
+PG_FUNCTION_INFO_V1(vfloat8vfloat8mul2);
 PG_FUNCTION_INFO_V1(vfloat8pl);
 PG_FUNCTION_INFO_V1(vfloat8_accum);
 PG_FUNCTION_INFO_V1(vfloat8_avg);
@@ -23,6 +24,28 @@ do {															\
 				(errcode(ERRCODE_NUMERIC_VALUE_OUT_OF_RANGE),	\
 		 errmsg("value out of range: underflow")));				\
 } while(0)
+
+
+Datum vfloat8vfloat8mul2(PG_FUNCTION_ARGS)
+{
+	vtype		*arg1 = (vtype *)PG_GETARG_POINTER(0);
+	vtype		*arg2 = (vtype *)PG_GETARG_POINTER(1);
+	vtype		*result;
+	float8		mul;
+	int			i;
+
+	result = buildvtype(FLOAT8OID, BATCHSIZE, arg1->skipref);
+
+	for (i = 0; i < BATCHSIZE; i++ )
+	{
+		if (arg1->skipref[i])
+			continue;
+		mul = DatumGetFloat8(arg1->values[i]) * DatumGetFloat8(arg2->values[i]);
+		result->values[i] = Float8GetDatum(mul);
+	}
+
+	PG_RETURN_POINTER(result);
+}
 
 Datum vfloat8pl(PG_FUNCTION_ARGS)
 {

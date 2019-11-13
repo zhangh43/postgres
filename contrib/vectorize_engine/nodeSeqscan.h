@@ -1,21 +1,16 @@
 /*-------------------------------------------------------------------------
  *
- * vscan.h
- *	  TODO file description
- *
- *
- * Copyright (c) 2019-Present Pivotal Software, Inc.
- *
+ * nodescan.h
  *
  *-------------------------------------------------------------------------
  */
 
-#ifndef VECTOR_ENGINE_SCAN_H
-#define VECTOR_ENGINE_SCAN_H
+#ifndef VECTOR_ENGINE_NODE_SCAN_H
+#define VECTOR_ENGINE_NODE_SCAN_H
 
 #include "nodes/plannodes.h"
 
-typedef Scan VSeqScan;
+//typedef Scan VSeqScan;
 extern CustomScan *MakeCustomScanForSeqScan(void);
 extern void InitVectorScan(void);
 

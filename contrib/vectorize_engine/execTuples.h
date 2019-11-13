@@ -1,5 +1,5 @@
-#ifndef VECTOR_ENGINE_EXEC_TUPLE_H
-#define VECTOR_ENGINE_EXEC_TUPLE_H
+#ifndef VECTOR_ENGINE_EXEC_TUPLES_H
+#define VECTOR_ENGINE_EXEC_TUPLES_H
 
 #include "postgres.h"
 
@@ -7,18 +7,8 @@
 #include "nodes/parsenodes.h"
 #include "executor/tuptable.h"
 #include "storage/buf.h"
-#include "vtype.h"
+#include "vtype/vtype.h"
 
-typedef struct VectorTupleSlot
-{
-	TupleTableSlot	tts;
-	int32			dim;
-	Buffer			tts_buffers[BATCHSIZE];
-	bool			skip[BATCHSIZE];
-} VectorTupleSlot;
-
-extern TupleTableSlot *VExecClearTuple(TupleTableSlot *slot);
-extern void VExecPinSlotBuffers(TupleTableSlot *slot, Buffer buffer, int idx);
 /*
  * prototypes from functions in execTuples.c
  */

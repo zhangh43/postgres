@@ -23,9 +23,8 @@
 #include "utils/xml.h"
 
 #include "executor.h"
-#include "vtype.h"
 #include "execTuples.h"
-
+#include "vectorTupleSlot.h"
 
 /* ----------------------------------------------------------------
  *		ExecQual
@@ -98,16 +97,18 @@ VExecScanQual(List *qual, ExprContext *econtext, bool resultForNull)
 		bool		isNull;
 		vbool		*expr_val_bools;
 
+		/* take a batch as input to evaluate quals */
 		expr_value = ExecEvalExpr(clause, econtext, &isNull, NULL);
 		
 		expr_val_bools = (vbool *)DatumGetPointer(expr_value);
 		
+		/* using skip array to indicated row which didn't pass the qual */
 		for(row = 0; row < BATCHSIZE; row++)
 			if((!expr_val_bools->isnull[row] || !resultForNull) && 
 				!DatumGetBool(expr_val_bools->values[row]) &&
 				!vslot->skip[row])
 				vslot->skip[row] = true;
-		/* TODO: opt: add non-skip dim for vslot to skip the whole batch?*/
+		/* TODO: opt: add skipped count for vslot to support skipping the whole batch?*/
 	}
 
 	MemoryContextSwitchTo(oldContext);

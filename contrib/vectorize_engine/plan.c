@@ -23,7 +23,7 @@
 #include "utils/syscache.h"
 
 #include "plan.h"
-#include "nodeScan.h"
+#include "nodeSeqscan.h"
 #include "nodeAgg.h"
 #include "utils.h"
 
@@ -246,7 +246,7 @@ plan_tree_mutator(Node *node,
 		case T_SeqScan:
 			{
 				CustomScan	*cscan;
-				VSeqScan	*vscan;
+				SeqScan	*vscan;
 
 				cscan = MakeCustomScanForSeqScan();
 				FLATCOPY(vscan, node, SeqScan);
