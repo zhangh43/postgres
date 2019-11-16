@@ -3,27 +3,24 @@
 --
 
 -- construction of test data
-SET client_min_messages TO 'warning';
-
-CREATE SCHEMA regtest_custom_scan;
-
-SET search_path TO regtest_custom_scan, public;
 
 CREATE TABLE t1 (
-    a   int
+    a   int,
+	b	double precision
 );
-INSERT INTO t1 (SELECT s FROM generate_series(1,400) s);
+INSERT INTO t1 SELECT generate_series(1,3), 2.3;
+INSERT INTO t1 SELECT generate_series(1,3), 3.3;
+INSERT INTO t1 SELECT generate_series(1,3), 4.3;
 VACUUM ANALYZE t1;
 
-RESET client_min_messages;
---
--- Check Plans if no special extension is loaded.
---
-EXPLAIN (costs off) SELECT * FROM t1;
---
---
-LOAD '$libdir/vectorize_engine';
-EXPLAIN (costs off) SELECT * FROM t1;
+create extension vectorize_engine;
+SET enable_vectorize_engine TO on;
+SELECT * FROM t1;
+SELECT b FROM t1;
+SELECT b+1 FROM t1;
+SELECT count(b) FROM t1;
+SELECT a, sum(b), avg(b)  FROM t1 group by a;
+SELECT a, sum(b), avg(b)  FROM t1 where a < 3 group by a;
 
--- Test cleanup
-DROP SCHEMA regtest_custom_scan CASCADE;
+
+drop extension vectorize_engine;
