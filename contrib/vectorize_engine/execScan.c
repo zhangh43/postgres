@@ -23,6 +23,7 @@
 #include "utils/memutils.h"
 
 #include "executor.h"
+#include "vectorTupleSlot.h"
 /*
  * ExecScanFetch -- fetch next potential tuple
  *
@@ -220,6 +221,7 @@ VExecScan(CustomScanState *css,
 				 * from this scan tuple, in which case continue scan.
 				 */
 				resultSlot = ExecProject(projInfo, &isDone);
+				memcpy(((VectorTupleSlot*)resultSlot)->skip, ((VectorTupleSlot*)slot)->skip, sizeof(bool) * BATCHSIZE);
 				if (isDone != ExprEndResult)
 				{
 					node->ps.ps_TupFromTlist = (isDone == ExprMultipleResult);

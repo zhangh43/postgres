@@ -493,7 +493,6 @@ static void build_hash_table(AggState *aggstate);
 /* lookup_hash_entry now return a batch of hash entries. */
 static AggHashEntry *lookup_hash_entry(AggState *aggstate,
 				  TupleTableSlot *inputslot);
-static TupleTableSlot *agg_retrieve_direct(AggState *aggstate);
 static void agg_fill_hash_table(AggState *aggstate);
 static Datum GetAggInitVal(Datum textInitVal, Oid transtype);
 static void build_pertrans_for_aggref(AggStatePerTrans pertrans,
@@ -532,13 +531,13 @@ typedef struct VectorAggState
 static AggState *VExecInitAgg(Agg *node, EState *estate, int eflags);
 static TupleTableSlot *VExecAgg(VectorAggState *node);
 static void VExecEndAgg(AggState *node);
-static void convert_agg_value_to_batch(AggState *aggstate, AggStatePerAgg peraggs);
 static void advance_aggregates_vectorize(AggState *aggstate, AggHashEntry *entries);
 static void advance_transition_function_vectorize(AggState *aggstate,
 							AggStatePerTrans pertrans,
 							AggHashEntry *entries);
 
 static TupleTableSlot *agg_retrieve_hash_table(VectorAggState *aggstate);
+static TupleTableSlot *agg_retrieve_direct(VectorAggState *vaggstate);
 /* CustomScanMethods */
 static Node *CreateVectorAggState(CustomScan *custom_plan);
 
@@ -642,32 +641,6 @@ EndVectorAgg(CustomScanState *css)
 	VectorAggState *vaggstate;
 	vaggstate = (VectorAggState*)css;
 	VExecEndAgg(vaggstate->aggstate);
-}
-
-static void
-convert_agg_value_to_batch(AggState *aggstate, AggStatePerAgg peraggs)
-{
-
-	ExprContext *econtext;
-	Datum	   *aggvalues;
-	int			iter;
-	int aggno;
-
-	econtext = aggstate->ss.ps.ps_ExprContext;
-	aggvalues = econtext->ecxt_aggvalues;
-	iter =0;
-	for (aggno = 0; aggno < aggstate->numaggs; aggno++)
-	{
-		AggStatePerAgg peragg = &peraggs[aggno];
-		Oid aggretType = peragg->aggref->aggtype;
-		vtype *vagg = (vtype *)buildvtype(GetVtype(aggretType), BATCHSIZE, NULL);
-		vagg->dim = 1;
-		vagg->values[iter] = aggvalues[aggno];
-		/*TODO*/
-		vagg->isnull[iter] = false;
-
-		econtext->ecxt_aggvalues[aggno] = PointerGetDatum(vagg);
-	}
 }
 
 static void
@@ -2327,7 +2300,7 @@ VExecAgg(VectorAggState *vnode)
 				result = agg_retrieve_hash_table(vnode);
 				break;
 			default:
-				result = agg_retrieve_direct(node);
+				result = agg_retrieve_direct(vnode);
 				break;
 		}
 
@@ -2342,8 +2315,9 @@ VExecAgg(VectorAggState *vnode)
  * ExecAgg for non-hashed case
  */
 static TupleTableSlot *
-agg_retrieve_direct(AggState *aggstate)
+agg_retrieve_direct(VectorAggState *vaggstate)
 {
+	AggState	*aggstate = vaggstate->aggstate;
 	Agg		   *node = aggstate->phase->aggnode;
 	ExprContext *econtext;
 	ExprContext *tmpcontext;
@@ -2358,6 +2332,9 @@ agg_retrieve_direct(AggState *aggstate)
 	int			nextSetSize;
 	int			numReset;
 	int			i;
+	vtype		*column;
+	VectorTupleSlot	*vslot;
+	TupleDesc		vdesc;
 
 	/*
 	 * get state info from node
@@ -2649,20 +2626,25 @@ agg_retrieve_direct(AggState *aggstate)
 
 		finalize_aggregates(aggstate, peragg, pergroup, currentSet);
 
-		//TODO:
-		convert_agg_value_to_batch(aggstate, peragg);
-
 		/*
 		 * If there's no row to project right now, we must continue rather
 		 * than returning a null since there might be more groups.
 		 */
 		result = project_aggregates(aggstate);
 
-		//TODO:
-		((VectorTupleSlot*)result)->dim = 1;
+		/* Postprocess plain agg return value */
+		vslot = (VectorTupleSlot *)vaggstate->resultSlot;
+		VExecClearTuple((TupleTableSlot *)vslot);
+		vdesc = aggstate->ss.ps.ps_ResultTupleSlot->tts_tupleDescriptor;
 
-		if (result)
-			return result;
+		for(i = 0; i < vdesc->natts; i++)
+		{
+			column = (vtype *)DatumGetPointer(vslot->tts.tts_values[i]);
+			column->values[0] = result->tts_values[i];
+		}
+		vslot->skip[0] = false;
+		ExecStoreVirtualTuple((TupleTableSlot *)vslot);
+		return (TupleTableSlot *)vslot;
 	}
 
 	/* No more groups */
@@ -2726,7 +2708,7 @@ agg_fill_hash_table(AggState *aggstate)
 static TupleTableSlot *
 agg_retrieve_hash_table(VectorAggState *vaggstate)
 {
-	AggState	*aggstate;
+	AggState	*aggstate = vaggstate->aggstate;
 	ExprContext *econtext;
 	AggStatePerAgg peragg;
 	AggStatePerGroup pergroup;
@@ -2739,7 +2721,6 @@ agg_retrieve_hash_table(VectorAggState *vaggstate)
 	int				i;
 	vtype			*column;
 
-	aggstate = vaggstate->aggstate;
 	/*
 	 * get state info from node
 	 */
