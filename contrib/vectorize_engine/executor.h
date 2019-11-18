@@ -5,14 +5,16 @@
 #include "executor/execdesc.h"
 #include "nodes/parsenodes.h"
 
+#include "nodeSeqscan.h"
+
 extern bool VExecScanQual(List *qual, ExprContext *econtext, bool resultForNull);
 /*
  * prototypes from functions in execScan.c
  */
-typedef TupleTableSlot *(*VExecScanAccessMtd) (CustomScanState *node);
-typedef bool (*VExecScanRecheckMtd) (CustomScanState *node, TupleTableSlot *slot);
+typedef TupleTableSlot *(*VExecScanAccessMtd) (VectorScanState *node);
+typedef bool (*VExecScanRecheckMtd) (VectorScanState *node, TupleTableSlot *slot);
 
 TupleTableSlot *
-VExecScan(CustomScanState *css, VExecScanAccessMtd accessMtd,
+VExecScan(VectorScanState* node, VExecScanAccessMtd accessMtd,
 			VExecScanRecheckMtd recheckMtd);
 #endif

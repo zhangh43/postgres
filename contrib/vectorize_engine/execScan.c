@@ -23,7 +23,9 @@
 #include "utils/memutils.h"
 
 #include "executor.h"
+#include "nodeSeqscan.h"
 #include "vectorTupleSlot.h"
+
 /*
  * ExecScanFetch -- fetch next potential tuple
  *
@@ -32,11 +34,12 @@
  * the access method's next-tuple routine.
  */
 static inline TupleTableSlot *
-ExecScanFetch(CustomScanState *node,
+ExecScanFetch(VectorScanState *vss,
 			  VExecScanAccessMtd accessMtd,
 			  VExecScanRecheckMtd recheckMtd)
 {
 	EState			*estate;
+	SeqScanState	*node = vss->seqstate;
 	
 	estate = node->ss.ps.state;
 
@@ -59,7 +62,7 @@ ExecScanFetch(CustomScanState *node,
 			 * only for rechecking the scan/join quals but also for storing
 			 * the correct tuple in the slot.
 			 */
-			if (!(*recheckMtd) (node, slot))
+			if (!(*recheckMtd) (vss, slot))
 				ExecClearTuple(slot);	/* would not be returned by scan */
 			return slot;
 		}
@@ -82,7 +85,7 @@ ExecScanFetch(CustomScanState *node,
 						   slot, InvalidBuffer, false);
 
 			/* Check if it meets the access-method conditions */
-			if (!(*recheckMtd) (node, slot))
+			if (!(*recheckMtd) (vss, slot))
 				ExecClearTuple(slot);	/* would not be returned by scan */
 
 			return slot;
@@ -92,7 +95,7 @@ ExecScanFetch(CustomScanState *node,
 	/*
 	 * Run the node-type-specific access method function to get the next tuple
 	 */
-	return (*accessMtd) (node);
+	return (*accessMtd) (vss);
 }
 
 /* ----------------------------------------------------------------
@@ -118,7 +121,7 @@ ExecScanFetch(CustomScanState *node,
  * ----------------------------------------------------------------
  */
 TupleTableSlot *
-VExecScan(CustomScanState *css,
+VExecScan(VectorScanState *vss,
 		 VExecScanAccessMtd accessMtd,	/* function returning a tuple */
 		 VExecScanRecheckMtd recheckMtd)
 {
@@ -129,7 +132,7 @@ VExecScan(CustomScanState *css,
 	TupleTableSlot	*resultSlot;
 	ScanState 		*node;
 	
-	node = &css->ss;
+	node = &vss->seqstate->ss;
 
 	/*
 	 * Fetch data from node
@@ -145,7 +148,7 @@ VExecScan(CustomScanState *css,
 	if (!qual && !projInfo)
 	{
 		ResetExprContext(econtext);
-		return ExecScanFetch(css, accessMtd, recheckMtd);
+		return ExecScanFetch(vss, accessMtd, recheckMtd);
 	}
 
 	/*
@@ -180,7 +183,7 @@ VExecScan(CustomScanState *css,
 
 		CHECK_FOR_INTERRUPTS();
 
-		slot = ExecScanFetch(css, accessMtd, recheckMtd);
+		slot = ExecScanFetch(vss, accessMtd, recheckMtd);
 
 		/*
 		 * if the slot returned by the accessMtd contains NULL, then it means
